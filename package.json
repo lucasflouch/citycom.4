@@ -1,6 +1,7 @@
+
 {
   "name": "guia-comercial-argentina",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Marketplace de comercios locales",
   "type": "module",
   "scripts": {
