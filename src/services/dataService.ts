@@ -32,34 +32,33 @@ const mapComercio = (db: any, reviewsForComercio: Review[] = [], ownerPlan?: Sub
     direccion: db.direccion || '',
     latitude: db.latitude ? Number(db.latitude) : undefined,
     longitude: db.longitude ? Number(db.longitude) : undefined,
+    
     isVerified: !!db.is_verified,
     isWaVerified: !!db.is_wa_verified,
     planId: String(db.plan_id || 'free'),
+    
     rating: Number(avgRating.toFixed(1)),
     reviewCount: reviewsForComercio.length,
     reviews: reviewsForComercio,
+    
     plan: ownerPlan
   };
 };
 
-export const fetchAppData = async (): Promise<AppData> => {
-  const emptyData: AppData = {
-      provincias: [], ciudades: [], rubros: [], subRubros: [], plans: [], comercios: [], banners: []
-  };
-
+export const fetchAppData = async (): Promise<AppData | null> => {
   try {
     const fetchSafe = async (tableName: string, orderField?: string) => {
       let query = supabase.from(tableName).select('*');
       if (orderField) query = query.order(orderField);
       const { data, error } = await query;
       if (error) {
-        console.warn(`DataService: Error fetch tabla ${tableName}:`, error.message);
+        console.warn(`DataService: Aviso tabla ${tableName}:`, error.message);
         return [];
       }
       return data || [];
     };
 
-    // Usamos Promise.allSettled para robustez total
+    // Usamos Promise.allSettled para que si falla una tabla, no explote todo el inicio
     const results = await Promise.allSettled([
       fetchSafe('provincias', 'nombre'),
       fetchSafe('ciudades', 'nombre'),
@@ -71,6 +70,7 @@ export const fetchAppData = async (): Promise<AppData> => {
       fetchSafe('profiles')
     ]);
 
+    // Función auxiliar para extraer el resultado o devolver array vacío
     const getResult = (index: number) => {
         const res = results[index];
         return res.status === 'fulfilled' ? res.value : [];
@@ -85,35 +85,25 @@ export const fetchAppData = async (): Promise<AppData> => {
     const revs = getResult(6);
     const profiles = getResult(7);
     
-    // Mapeos robustos
     const reviewsByComercioId = new Map<string, Review[]>();
     revs.forEach((review: any) => {
-      if (!review) return;
       const key = String(review.comercio_id);
       if (!reviewsByComercioId.has(key)) reviewsByComercioId.set(key, []);
       reviewsByComercioId.get(key)!.push(mapReview(review));
     });
 
     const profilesMap = new Map<string, Profile>(profiles.map((p: any) => [String(p.id), p as Profile]));
-    
-    // Plans fallback si la DB está vacía
-    let finalPlans = plans.map((p: any) => ({
+    const plansMap = new Map<string, SubscriptionPlan>(plans.map((p: any) => [String(p.id), {
         id: String(p.id),
         nombre: p.nombre,
         precio: Number(p.precio),
-        limiteImagenes: Number(p.limite_imagenes || 1),
-        limitePublicaciones: Number(p.limite_publicaciones || 1),
+        limiteImagenes: Number(p.limite_imagenes),
+        limitePublicaciones: Number(p.limite_publicaciones || 10),
         tienePrioridad: !!p.tiene_prioridad,
         tieneChat: !!p.tiene_chat
-    }));
-
-    if (finalPlans.length === 0) {
-        // Fallback local por si RLS bloquea planes
-        finalPlans = [{ id: 'free', nombre: 'Gratis', precio: 0, limiteImagenes: 1, limitePublicaciones: 1, tienePrioridad: false, tieneChat: false }];
-    }
-
-    const plansMap = new Map<string, SubscriptionPlan>(finalPlans.map((p:any) => [p.id, p]));
-    const defaultPlan = finalPlans.find((p:any) => p.precio === 0) || finalPlans[0];
+    }]));
+    
+    const defaultPlan = Array.from(plansMap.values()).find(p => p.nombre.toLowerCase() === 'gratis');
 
     return {
       provincias: provs.map((p: any): Provincia => ({ id: String(p.id), nombre: p.nombre })),
@@ -126,15 +116,15 @@ export const fetchAppData = async (): Promise<AppData> => {
         id: String(r.id), 
         nombre: r.nombre, 
         icon: r.icon || '📍',
-        slug: r.slug || 'general'
+        slug: r.slug || r.nombre.toLowerCase().replace(/\s+/g, '-')
       })),
       subRubros: subRubs.map((sr: any): SubRubro => ({
         id: String(sr.id),
         rubroId: String(sr.rubro_id),
         nombre: sr.nombre,
-        slug: sr.slug || 'general'
+        slug: sr.slug || sr.nombre.toLowerCase().replace(/\s+/g, '-')
       })),
-      plans: finalPlans,
+      plans: Array.from(plansMap.values()),
       comercios: coms.map((c: any) => {
         const ownerProfile = profilesMap.get(String(c.usuario_id));
         const ownerPlan = ownerProfile ? plansMap.get(ownerProfile.plan_id) : defaultPlan;
@@ -143,7 +133,10 @@ export const fetchAppData = async (): Promise<AppData> => {
       banners: []
     };
   } catch (error) {
-    console.error("DataService: Error crítico general:", error);
-    return emptyData;
+    console.error("Error crítico en fetchAppData:", error);
+    // Retornamos un objeto vacío válido para que la UI al menos cargue los componentes vacíos
+    return {
+        provincias: [], ciudades: [], rubros: [], subRubros: [], plans: [], comercios: [], banners: []
+    };
   }
 };
