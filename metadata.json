@@ -1,0 +1,7 @@
+{
+  "name": "G4.2 mercado pago",
+  "description": "Marketplace de comercios locales",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
