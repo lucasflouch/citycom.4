@@ -47,7 +47,9 @@ serve(async (req: Request) => {
       throw new Error('MERCADOPAGO_ACCESS_TOKEN no configurado en Supabase Secrets.')
     }
 
-    const baseUrl = origin || Deno.env.get('SITE_URL') || 'http://localhost:5173'
+    let baseUrl = origin || Deno.env.get('SITE_URL') || 'http://localhost:5173'
+    // Sanitizar baseUrl para evitar doble slash al concatenar
+    baseUrl = baseUrl.replace(/\/$/, "");
     
     // 3. Crear Preferencia MP
     const preferencePayload = {

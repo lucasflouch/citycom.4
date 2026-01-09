@@ -94,8 +94,15 @@ const App = () => {
   const processPaymentReturn = async (paymentId: string | null, status: string | null, currentSession: Session | null) => {
     console.log("💳 [Payment] Iniciando procesamiento...", { paymentId, status });
     
-    // Limpieza inmediata de URL para evitar re-procesamientos al refrescar
-    window.history.replaceState(null, '', window.location.pathname);
+    // CRITICAL FIX: Sanitizar pathname para evitar SecurityError por dobles slashes (//path)
+    // que los navegadores interpretan como protocol-relative URLs (https://path)
+    const cleanPath = window.location.pathname.replace(/\/+/g, '/') || '/';
+    
+    try {
+        window.history.replaceState(null, '', cleanPath);
+    } catch (e) {
+        console.warn("⚠️ No se pudo limpiar la URL (History API error):", e);
+    }
 
     // Si no hay sesión, intentamos recuperar el estado
     if (!currentSession) {
