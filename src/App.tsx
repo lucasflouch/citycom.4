@@ -19,7 +19,6 @@ const App = () => {
   // --- ESTADO GLOBAL ---
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  // Flag específico para saber si estamos sincronizando el perfil tras un login
   const [loadingProfile, setLoadingProfile] = useState(false);
 
   const [appData, setAppData] = useState<AppData>({
@@ -46,9 +45,10 @@ const App = () => {
   
   // --- REFS ---
   const paymentProcessedRef = useRef(false);
+  const appInitializedRef = useRef(false); // NUEVO: Control estricto de inicialización única
 
   // ==================================================================================
-  // 1. LOGOUT & PROFILE
+  // 1. HELPERS & CALLBACKS
   // ==================================================================================
   
   const loadProfile = useCallback(async (userId: string) => {
@@ -75,16 +75,14 @@ const App = () => {
   }, []);
 
   const handleLogout = useCallback(async (isAutoLogout: boolean = false) => {
-    // 1. Limpieza de estado local (Atomic Reset)
     setSession(null);
     setProfile(null);
     setPage(Page.Home);
     setLoadingProfile(false);
     
-    // 2. Limpieza de referencias críticas
-    paymentProcessedRef.current = false;
+    // NOTA: NO reseteamos appInitializedRef ni paymentProcessedRef aquí.
+    // La App no necesita recargar datos públicos al desloguearse.
     
-    // 3. Limpieza de storage
     localStorage.removeItem('sb-sqmjnynklpwjceyuyemz-auth-token');
     
     if (isAutoLogout) {
@@ -99,10 +97,92 @@ const App = () => {
   }, []);
 
   // ==================================================================================
-  // 2. DETECCIÓN Y PROCESAMIENTO DE PAGOS
+  // 2. EFECTO ÚNICO DE INICIALIZACIÓN (MOUNT ONLY)
   // ==================================================================================
   useEffect(() => {
-    const checkUrlForPayment = async () => {
+    // Si ya inicializamos, no hacemos nada (protección contra StrictMode y re-renders)
+    if (appInitializedRef.current) return;
+
+    let mounted = true;
+
+    const initApp = async () => {
+      appInitializedRef.current = true;
+      
+      // Chequeo de Pagos en URL antes de cargar nada
+      const params = new URLSearchParams(window.location.search);
+      const paymentId = params.get('payment_id');
+      const status = params.get('status') || params.get('collection_status');
+      const isPaymentReturn = !!(paymentId || status);
+
+      // Si es retorno de pago, NO mostramos el spinner de carga general para no tapar la lógica de pago
+      if (!isPaymentReturn) {
+         setLoading(true);
+      } else {
+         // Si hay pago, marcamos que vamos a procesarlo para que el otro useEffect lo tome
+         paymentProcessedRef.current = false; 
+      }
+
+      try {
+        // 1. Carga de Datos Públicos
+        const dbData = await fetchAppData();
+        if (mounted && dbData) setAppData(dbData);
+
+        // 2. Recuperación de Sesión Inicial
+        const { data: { session: curSession } } = await supabase.auth.getSession();
+        
+        if (mounted && curSession) {
+            setSession(curSession);
+            // Solo cargamos perfil si no estamos en medio de un proceso de pago crítico
+            if (!isPaymentReturn) {
+                await loadProfile(curSession.user.id);
+            }
+        }
+      } catch (err) {
+        console.error("Error inicio app:", err);
+      } finally {
+        // Solo quitamos el loading si NO es un retorno de pago (el pago maneja su propio UI)
+        if (mounted && !isPaymentReturn) {
+            setLoading(false);
+        }
+      }
+    };
+
+    initApp();
+
+    return () => { mounted = false; };
+  }, [loadProfile]); // loadProfile es estable, esto corre una vez.
+
+  // ==================================================================================
+  // 3. EFECTO DE LISTENER DE AUTH (SEPARADO)
+  // ==================================================================================
+  useEffect(() => {
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+      console.log("🔐 Auth Event:", event);
+
+      if (event === 'SIGNED_IN' && newSession) {
+        setSession(newSession);
+        // Si no estamos verificando un pago, procedemos al dashboard
+        if (!verifyingPayment) {
+            await loadProfile(newSession.user.id);
+            setPage(Page.Dashboard);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setSession(null);
+        setProfile(null);
+        setPage(Page.Home);
+      }
+    });
+
+    return () => { 
+        authListener.subscription.unsubscribe();
+    };
+  }, [loadProfile, verifyingPayment]);
+
+  // ==================================================================================
+  // 4. EFECTO DE PROCESAMIENTO DE PAGOS (SEPARADO)
+  // ==================================================================================
+  useEffect(() => {
+    const checkPayment = async () => {
       if (paymentProcessedRef.current) return;
 
       const params = new URLSearchParams(window.location.search);
@@ -111,20 +191,18 @@ const App = () => {
       
       if (!paymentId && !status) return;
 
-      console.log("💳 [Payment] Retorno detectado:", { paymentId, status });
-      
-      // Matamos loading global inmediatamente
-      setLoading(false);
+      console.log("💳 [Payment] Procesando...", { paymentId, status });
       paymentProcessedRef.current = true;
+      setLoading(false); // Aseguramos que el spinner global se vaya
+
       window.history.replaceState(null, '', window.location.pathname);
 
       if (status === 'failure' || status === 'rejected' || status === 'null') {
-         setNotification({ text: 'El proceso de pago no se completó o fue cancelado.', type: 'error' });
+         setNotification({ text: 'Pago cancelado o no completado.', type: 'error' });
          return;
       }
-
       if (status === 'pending' || status === 'in_process') {
-         setNotification({ text: 'Tu pago se está procesando. Te avisaremos cuando se acredite.', type: 'success' });
+         setNotification({ text: 'Pago pendiente de acreditación.', type: 'success' });
          return;
       }
 
@@ -137,23 +215,22 @@ const App = () => {
                 body: { payment_id: paymentId }
             });
 
-            if (funcError) throw new Error(`Error conexión: ${funcError.message}`);
-            if (!responseData?.success) throw new Error(responseData?.error || 'Validación fallida.');
+            if (funcError) throw new Error(funcError.message);
+            if (!responseData?.success) throw new Error(responseData?.error || 'Falló validación.');
 
-            setNotification({ text: '¡Excelente! Plan activado correctamente.', type: 'success' });
+            setNotification({ text: '¡Pago exitoso! Plan activado.', type: 'success' });
             
             const { data: { session: currentSession } } = await supabase.auth.getSession();
             if (currentSession) {
                 await loadProfile(currentSession.user.id);
                 setPage(Page.Dashboard);
             } else {
-                setNotification({ text: 'Plan activado. Iniciá sesión.', type: 'success' });
                 setPage(Page.Auth);
             }
 
           } catch (err: any) {
-            console.error("❌ [Payment] Error:", err);
-            setNotification({ text: `Error confirmando: ${err.message}.`, type: 'error' });
+            console.error("Payment Error:", err);
+            setNotification({ text: `Error activando plan: ${err.message}`, type: 'error' });
             setPage(Page.Pricing);
           } finally {
             clearTimeout(safetyTimer);
@@ -163,67 +240,11 @@ const App = () => {
       }
     };
 
-    checkUrlForPayment();
+    checkPayment();
   }, [loadProfile]);
 
   // ==================================================================================
-  // 3. INICIALIZACIÓN DE APP Y LISTENER DE AUTH
-  // ==================================================================================
-  useEffect(() => {
-    let mounted = true;
-
-    const initApp = async () => {
-      if (!paymentProcessedRef.current) setLoading(true);
-
-      try {
-        const dbData = await fetchAppData();
-        if (mounted && dbData) setAppData(dbData);
-
-        const { data: { session: curSession } } = await supabase.auth.getSession();
-        
-        if (mounted && curSession) {
-            setSession(curSession);
-            if (!paymentProcessedRef.current) {
-                await loadProfile(curSession.user.id);
-            }
-        }
-      } catch (err) {
-        console.error("Error inicio app:", err);
-      } finally {
-        if (mounted && !paymentProcessedRef.current) setLoading(false);
-      }
-    };
-
-    initApp();
-
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, newSession) => {
-      if (!mounted) return;
-      
-      console.log("🔐 Auth Event:", event);
-
-      if (event === 'SIGNED_IN' && newSession) {
-        setSession(newSession);
-        // Aquí es donde ocurre la magia: Cargar perfil Y LUEGO navegar
-        if (!verifyingPayment) {
-            await loadProfile(newSession.user.id);
-            setPage(Page.Dashboard); // Navegación automática centralizada
-        }
-      } else if (event === 'SIGNED_OUT') {
-        // La limpieza ya se hace en handleLogout, pero esto es un respaldo
-        setSession(null);
-        setProfile(null);
-        setPage(Page.Home);
-      }
-    });
-
-    return () => { 
-        mounted = false;
-        authListener.subscription.unsubscribe();
-    };
-  }, [loadProfile, verifyingPayment]);
-
-  // ==================================================================================
-  // 4. LOGICA DE RENDERIZADO SEGURO
+  // UI RENDER
   // ==================================================================================
   const handleNavigate = (newPage: PageValue, entity?: Comercio | Conversation) => {
     if (newPage === Page.ComercioDetail && entity && 'nombre' in entity) {
@@ -244,14 +265,9 @@ const App = () => {
     if (dbData) setAppData(dbData);
   };
 
-  // ------------------------------------------------------------------
-  // RENDER CONDITIONAL HELPER
-  // Evita el rebote a login si hay sesión pero falta perfil (está cargando)
-  // ------------------------------------------------------------------
   const renderProtectedPage = (Component: React.ReactNode) => {
     if (!session) return <AuthPage onNavigate={handleNavigate} />;
     
-    // Si hay sesión pero no perfil, mostramos carga en lugar de AuthPage
     if (loadingProfile || !profile) {
         return (
             <div className="flex flex-col items-center justify-center min-h-[50vh]">
@@ -260,11 +276,10 @@ const App = () => {
             </div>
         );
     }
-    
     return Component;
   };
 
-  // UI DE VERIFICACIÓN PAGO
+  // 1. UI Verificación Pago (Prioridad Máxima)
   if (verifyingPayment) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50 px-4 fixed inset-0 z-[99999]">
       <div className="animate-spin rounded-full h-20 w-20 border-t-4 border-b-4 border-indigo-600 mb-8"></div>
@@ -279,7 +294,7 @@ const App = () => {
     </div>
   );
 
-  // LOADING INICIAL (Solo al refrescar o primera carga)
+  // 2. UI Loading Inicial (Solo primera carga real)
   if (loading) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50">
       <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-indigo-600 mb-4"></div>
@@ -309,7 +324,6 @@ const App = () => {
         {page === Page.Home && <HomePage onNavigate={handleNavigate} data={appData} />}
         
         {page === Page.Auth && (session ? 
-            // Si ya hay sesión y entran a Auth, redirigir a Dashboard o mostrar carga
             (profile ? <DashboardPage session={session} profile={profile} onNavigate={handleNavigate} data={appData} refreshData={refreshData}/> : renderProtectedPage(null)) 
             : <AuthPage onNavigate={handleNavigate} />
         )}
