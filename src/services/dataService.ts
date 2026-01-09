@@ -46,13 +46,19 @@ const mapComercio = (db: any, reviewsForComercio: Review[] = [], ownerPlan?: Sub
 };
 
 export const fetchAppData = async (): Promise<AppData | null> => {
+  console.group('🚀 [Boot] Iniciando carga de datos...');
+  console.time('⏱️ Total Data Load');
+  
   try {
     const fetchSafe = async (tableName: string, orderField?: string) => {
+      // console.time(`Fetched ${tableName}`);
       let query = supabase.from(tableName).select('*');
       if (orderField) query = query.order(orderField);
       const { data, error } = await query;
+      // console.timeEnd(`Fetched ${tableName}`);
+      
       if (error) {
-        console.warn(`DataService: Aviso tabla ${tableName}:`, error.message);
+        console.warn(`⚠️ DataService: Error en tabla ${tableName}:`, error.message);
         return [];
       }
       return data || [];
@@ -70,6 +76,8 @@ export const fetchAppData = async (): Promise<AppData | null> => {
       fetchSafe('profiles')
     ]);
 
+    console.timeEnd('⏱️ Total Data Load');
+
     // Función auxiliar para extraer el resultado o devolver array vacío
     const getResult = (index: number) => {
         const res = results[index];
@@ -84,6 +92,8 @@ export const fetchAppData = async (): Promise<AppData | null> => {
     const coms = getResult(5);
     const revs = getResult(6);
     const profiles = getResult(7);
+
+    console.log(`📊 Stats: ${coms.length} comercios, ${profiles.length} perfiles, ${plans.length} planes.`);
     
     const reviewsByComercioId = new Map<string, Review[]>();
     revs.forEach((review: any) => {
@@ -105,7 +115,7 @@ export const fetchAppData = async (): Promise<AppData | null> => {
     
     const defaultPlan = Array.from(plansMap.values()).find(p => p.nombre.toLowerCase() === 'gratis');
 
-    return {
+    const appData = {
       provincias: provs.map((p: any): Provincia => ({ id: String(p.id), nombre: p.nombre })),
       ciudades: ciuds.map((c: any): Ciudad => ({
         id: String(c.id),
@@ -132,8 +142,13 @@ export const fetchAppData = async (): Promise<AppData | null> => {
       }),
       banners: []
     };
+    
+    console.groupEnd();
+    return appData;
+
   } catch (error) {
-    console.error("Error crítico en fetchAppData:", error);
+    console.error("❌ Error CRÍTICO en fetchAppData:", error);
+    console.groupEnd();
     // Retornamos un objeto vacío válido para que la UI al menos cargue los componentes vacíos
     return {
         provincias: [], ciudades: [], rubros: [], subRubros: [], plans: [], comercios: [], banners: []
