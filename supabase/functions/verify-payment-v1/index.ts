@@ -10,66 +10,69 @@ const corsHeaders = {
 declare const Deno: any;
 
 serve(async (req: Request) => {
-  // Manejo de preflight request (CORS)
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
   try {
     const { payment_id } = await req.json()
-    if (!payment_id) throw new Error('Falta el payment_id en el cuerpo de la petición')
 
-    console.log(`Verificando pago: ${payment_id}`);
+    if (!payment_id) {
+        throw new Error('Falta el payment_id.')
+    }
 
-    // 1. Verificar pago con MP DIRECTAMENTE usando el Access Token del servidor
+    console.log(`[Edge Function] Verificando pago ID: ${payment_id}`);
+
+    const mpAccessToken = Deno.env.get('MERCADOPAGO_ACCESS_TOKEN');
+    if (!mpAccessToken) throw new Error('MERCADOPAGO_ACCESS_TOKEN no configurado.');
+
+    // 1. Consultar a Mercado Pago
     const mpResponse = await fetch(`https://api.mercadopago.com/v1/payments/${payment_id}`, {
-      headers: { 
-          Authorization: `Bearer ${Deno.env.get('MERCADOPAGO_ACCESS_TOKEN')}` 
-      }
+      headers: { Authorization: `Bearer ${mpAccessToken}` }
     })
     
     if (!mpResponse.ok) {
-        console.error("Error MP API Status:", mpResponse.status);
-        throw new Error('No se pudo verificar el pago con Mercado Pago.')
+        throw new Error(`Error consultando Mercado Pago: ${mpResponse.statusText}`)
     }
     
     const paymentData = await mpResponse.json()
 
-    // Verificamos estado
     if (paymentData.status !== 'approved') {
-        throw new Error(`El pago existe pero no está aprobado. Estado: ${paymentData.status}`)
+        throw new Error(`El pago no está aprobado. Estado: ${paymentData.status}`)
     }
 
     // 2. Extraer Metadata
     let metadata = paymentData.external_reference;
-    
     if (typeof metadata === 'string') {
         try {
             metadata = JSON.parse(metadata);
         } catch (e) {
-            console.error("Error parseando external_reference:", metadata);
-            throw new Error('La metadata del pago está corrupta.');
+            console.error("Error parsing metadata:", e);
         }
     }
 
     const { userId, planId } = metadata || {};
-
     if (!userId || !planId) {
-        throw new Error('Metadata incompleta: falta userId o planId.')
+        throw new Error(`Metadata incompleta. Recibido: ${JSON.stringify(metadata)}`)
     }
 
-    // 3. Inicializar Supabase Admin con la LLAVE MAESTRA PRIVADA
-    // USAMOS LA NUEVA LLAVE 'PRIVATE_SERVICE_ROLE' QUE CREASTE
+    // 3. Inicializar Supabase ADMIN
+    // CRÍTICO: Usamos SUPABASE_SERVICE_ROLE_KEY para saltar RLS
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('PRIVATE_SERVICE_ROLE') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false
+        }
+      }
     )
 
-    // 4. Calcular nueva fecha de vencimiento (HOY + 30 DÍAS)
+    // 4. Actualizar Profile
     const now = new Date();
     const expiresAt = new Date(now.setDate(now.getDate() + 30));
 
-    // 5. Actualizar Perfil (Plan + Vencimiento)
     const { error: updateError } = await supabaseAdmin
       .from('profiles')
       .update({ 
@@ -79,18 +82,17 @@ serve(async (req: Request) => {
       .eq('id', userId)
 
     if (updateError) {
-        console.error("Error actualizando perfil:", updateError);
-        throw new Error(`Error actualizando base de datos: ${updateError.message}`);
+        throw new Error(`Error actualizando perfil DB: ${updateError.message}`)
     }
 
-    // 6. Verificar si ya existe el historial para no duplicar
-    const { data: existingHistory } = await supabaseAdmin
+    // 5. Insertar Historial (verificando duplicados)
+    const { data: existing } = await supabaseAdmin
         .from('subscription_history')
         .select('id')
         .eq('payment_id', String(payment_id))
         .maybeSingle();
 
-    if (!existingHistory) {
+    if (!existing) {
         const { error: historyError } = await supabaseAdmin
           .from('subscription_history')
           .insert({
@@ -102,22 +104,23 @@ serve(async (req: Request) => {
             start_date: new Date().toISOString(),
             end_date: expiresAt.toISOString()
           })
-
+        
         if (historyError) {
-            console.error("Error guardando historial (no crítico):", historyError);
+            console.error("Warning: Error insertando historial:", historyError);
         }
     }
 
-    // 7. Respuesta Exitosa
-    return new Response(JSON.stringify({ success: true, planId, expiresAt, userId }), {
+    console.log(`[Edge Function] Éxito. Plan ${planId} activado para ${userId}`);
+
+    return new Response(JSON.stringify({ success: true, planId, userId }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 200
     })
 
   } catch (error: any) {
-    console.error('Error en Verify Payment Function:', error.message)
+    console.error('[Edge Function Error]:', error.message)
     return new Response(JSON.stringify({ success: false, error: error.message }), {
-        status: 200, 
+        status: 200, // Devolvemos 200 para que el frontend pueda leer el error en JSON
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
   }
