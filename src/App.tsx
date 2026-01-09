@@ -195,17 +195,37 @@ const App = () => {
       paymentProcessedRef.current = true;
       setLoading(false); // Aseguramos que el spinner global se vaya
 
+      // Limpiamos URL inmediatamente para evitar reprocesamientos al refrescar
       window.history.replaceState(null, '', window.location.pathname);
 
+      // Obtenemos sesión actual para poder recargar el perfil
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      
+      // Función auxiliar para restaurar el estado normal de la app
+      const restoreAppState = async () => {
+        if (currentSession) {
+          await loadProfile(currentSession.user.id);
+          setPage(Page.Dashboard);
+        } else {
+          setPage(Page.Auth);
+        }
+      };
+
+      // --- CASO 1: FALLO O CANCELACIÓN ---
       if (status === 'failure' || status === 'rejected' || status === 'null') {
          setNotification({ text: 'Pago cancelado o no completado.', type: 'error' });
-         return;
-      }
-      if (status === 'pending' || status === 'in_process') {
-         setNotification({ text: 'Pago pendiente de acreditación.', type: 'success' });
+         await restoreAppState(); // CRÍTICO: Recargar perfil aunque falle el pago
          return;
       }
 
+      // --- CASO 2: PENDIENTE ---
+      if (status === 'pending' || status === 'in_process') {
+         setNotification({ text: 'Pago pendiente de acreditación.', type: 'success' });
+         await restoreAppState(); // CRÍTICO: Recargar perfil
+         return;
+      }
+
+      // --- CASO 3: ÉXITO (Requiere validación backend) ---
       if (paymentId && (status === 'approved' || status === 'success')) {
           setVerifyingPayment(true);
           const safetyTimer = setTimeout(() => setShowForceExit(true), 12000);
@@ -219,23 +239,17 @@ const App = () => {
             if (!responseData?.success) throw new Error(responseData?.error || 'Falló validación.');
 
             setNotification({ text: '¡Pago exitoso! Plan activado.', type: 'success' });
-            
-            const { data: { session: currentSession } } = await supabase.auth.getSession();
-            if (currentSession) {
-                await loadProfile(currentSession.user.id);
-                setPage(Page.Dashboard);
-            } else {
-                setPage(Page.Auth);
-            }
+            // El perfil se recarga en el finally o al terminar el try
 
           } catch (err: any) {
             console.error("Payment Error:", err);
             setNotification({ text: `Error activando plan: ${err.message}`, type: 'error' });
-            setPage(Page.Pricing);
+            // Aunque falle la activación técnica, queremos que el usuario entre a la app
           } finally {
             clearTimeout(safetyTimer);
             setVerifyingPayment(false);
             setShowForceExit(false);
+            await restoreAppState(); // CRÍTICO: Siempre restaurar estado al final
           }
       }
     };
@@ -268,11 +282,19 @@ const App = () => {
   const renderProtectedPage = (Component: React.ReactNode) => {
     if (!session) return <AuthPage onNavigate={handleNavigate} />;
     
+    // Si estamos cargando perfil o el perfil es null, mostramos loading
+    // PERO si ya pasó mucho tiempo y sigue null (zombie), ofrecemos salir
     if (loadingProfile || !profile) {
         return (
             <div className="flex flex-col items-center justify-center min-h-[50vh]">
                 <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-indigo-600 mb-2"></div>
                 <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Cargando perfil...</p>
+                {/* Botón de escape por si se queda pegado */}
+                {!loadingProfile && !profile && (
+                  <button onClick={() => handleLogout()} className="mt-4 text-[10px] text-red-400 underline cursor-pointer hover:text-red-600">
+                    Reiniciar sesión
+                  </button>
+                )}
             </div>
         );
     }
