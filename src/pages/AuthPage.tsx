@@ -28,9 +28,12 @@ const AuthPage: React.FC<AuthPageProps> = ({ onNavigate }) => {
     setLoading(true);
     try {
       if (isLogin) {
-        const { error, data } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        if (data.session) onNavigate(Page.Dashboard);
+        // NOTA IMPORTANTE:
+        // No llamamos a onNavigate(Page.Dashboard) aquí manualmente.
+        // App.tsx escuchará el evento SIGNED_IN, cargará el perfil y redirigirá automáticamente.
+        // Esto previene condiciones de carrera donde navegamos antes de tener el perfil.
       } else {
         const { error, data } = await supabase.auth.signUp({
           email,
@@ -40,8 +43,9 @@ const AuthPage: React.FC<AuthPageProps> = ({ onNavigate }) => {
           }
         });
         if (error) throw error;
+        
         if (data.session) {
-          onNavigate(Page.Dashboard);
+          // Si hay sesión (login automático tras registro), App.tsx lo manejará.
         } else {
           alert('¡Cuenta creada! Verifica tu correo electrónico para activarla.');
           setIsLogin(true);
@@ -49,9 +53,9 @@ const AuthPage: React.FC<AuthPageProps> = ({ onNavigate }) => {
       }
     } catch (error: any) {
       setErrorMsg(error.message || 'Error en la autenticación');
-    } finally {
-      setLoading(false);
-    }
+      setLoading(false); // Solo bajamos el loading si hubo error
+    } 
+    // Si no hubo error, dejamos loading en true hasta que App.tsx desmonte este componente
   };
 
   const handleGoogleLogin = async () => {
@@ -125,7 +129,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ onNavigate }) => {
             disabled={loading}
             className="w-full py-5 bg-indigo-600 text-white rounded-3xl font-black text-lg shadow-indigo hover:bg-indigo-700 active:scale-[0.98] transition-all disabled:opacity-50 mt-4 uppercase tracking-widest"
           >
-            {loading ? 'Cargando...' : isLogin ? 'Ingresar' : 'Registrarme'}
+            {loading ? 'Ingresando...' : isLogin ? 'Ingresar' : 'Registrarme'}
           </button>
         </form>
 
@@ -150,7 +154,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ onNavigate }) => {
 
         <p className="mt-10 text-center text-sm text-slate-400 font-medium">
           {isLogin ? '¿No tenés cuenta todavía?' : '¿Ya tenés cuenta?'}
-          <button onClick={() => setIsLogin(!isLogin)} className="ml-2 text-indigo-600 font-black hover:underline decoration-2 underline-offset-4">
+          <button onClick={() => { setIsLogin(!isLogin); setErrorMsg(''); }} className="ml-2 text-indigo-600 font-black hover:underline decoration-2 underline-offset-4">
             {isLogin ? 'Registrate ahora' : 'Iniciá sesión'}
           </button>
         </p>
