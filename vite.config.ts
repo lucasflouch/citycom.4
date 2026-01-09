@@ -1,18 +1,17 @@
 
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-// import { VitePWA } from 'vite-plugin-pwa'; // Desactivado temporalmente para limpiar caché
+import { VitePWA } from 'vite-plugin-pwa';
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     react(),
-    /* 
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg'], 
       manifest: {
-        name: 'Guía de Comercios Locales',
+        name: 'Guía Comercial Argentina',
         short_name: 'GuíaComercial',
         description: 'Descubrí y contactá los mejores comercios de tu zona.',
         theme_color: '#6366f1',
@@ -43,10 +42,11 @@ export default defineConfig({
       workbox: {
         cleanupOutdatedCaches: true,
         clientsClaim: true,
-        skipWaiting: true
+        skipWaiting: true,
+        navigateFallback: '/index.html',
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}']
       }
     })
-    */
   ],
   base: '/', 
   build: {
