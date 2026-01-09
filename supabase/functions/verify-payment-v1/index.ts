@@ -58,6 +58,8 @@ serve(async (req: Request) => {
 
     // 3. Inicializar Supabase ADMIN
     // CRÍTICO: Usamos SUPABASE_SERVICE_ROLE_KEY para saltar RLS
+    // Esto asegura que podemos escribir en 'profiles' y 'subscription_history'
+    // sin importar si la sesión del usuario está activa o no en este contexto.
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',

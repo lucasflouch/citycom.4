@@ -85,101 +85,105 @@ const App = () => {
   }, []);
 
   // ==================================================================================
-  // 2. DETECCIÓN Y PROCESAMIENTO DE PAGOS (LÓGICA BLINDADA)
+  // 2. DETECCIÓN Y PROCESAMIENTO DE PAGOS (LÓGICA BLINDADA V2)
   // ==================================================================================
   useEffect(() => {
     const checkUrlForPayment = async () => {
-      // Si ya procesamos el pago en esta carga de página, no hacemos nada.
+      // Evitar doble ejecución estricta
       if (paymentProcessedRef.current) return;
 
       const params = new URLSearchParams(window.location.search);
       const paymentId = params.get('payment_id');
       const status = params.get('status') || params.get('collection_status');
       
-      // Si no hay parámetros de pago, salimos inmediatamente.
+      // Si no hay params de pago, no hacemos nada y dejamos que initApp maneje la carga
       if (!paymentId && !status) return;
 
-      console.log("💳 [Payment] Detectado retorno de Mercado Pago:", { paymentId, status });
+      console.log("💳 [Payment] Retorno detectado:", { paymentId, status });
       
-      // Marcamos como procesado y limpiamos la URL para evitar loops si el usuario recarga
+      // CRÍTICO: Si detectamos retorno de MP, matamos el spinner global inmediatamente
+      // para evitar el loop "Cargando..." si algo sale mal abajo.
+      setLoading(false);
       paymentProcessedRef.current = true;
+      
+      // Limpiamos la URL visualmente para que el usuario no recargue y reenvíe
       window.history.replaceState(null, '', window.location.pathname);
 
-      // CASO 1: Pago no aprobado (rejected, cancelled, pending)
-      if (status && status !== 'approved' && status !== 'success') {
-         console.warn(`⚠️ [Payment] Estado no aprobado: ${status}`);
+      // --- SEMÁFORO DE ESTADOS ---
+
+      // LUZ ROJA: Fallo o Cancelación
+      if (status === 'failure' || status === 'rejected' || status === 'null') {
+         console.warn(`⚠️ [Payment] Cancelado/Fallido: ${status}`);
          setNotification({ 
-             text: status === 'pending' || status === 'in_process' 
-                 ? 'El pago está pendiente de procesamiento.' 
-                 : 'El proceso de pago fue cancelado.', 
-             type: status === 'pending' ? 'success' : 'error' 
+             text: 'El proceso de pago no se completó o fue cancelado.', 
+             type: 'error' 
          });
-         // Redirigimos a Pricing para que intente de nuevo si quiere
-         setPage(Page.Pricing);
+         // No llamamos al backend. Dejamos al usuario donde esté (probablemente Home o Auth según sesión)
          return;
       }
 
-      // CASO 2: Error estructural (status aprobado pero sin ID)
-      if (!paymentId) {
-          console.error("❌ [Payment] Error: Status aprobado pero falta payment_id");
-          setNotification({ text: 'Error en la comunicación con el medio de pago.', type: 'error' });
-          return;
+      // LUZ AMARILLA: Pendiente
+      if (status === 'pending' || status === 'in_process') {
+         console.warn(`⚠️ [Payment] Pendiente: ${status}`);
+         setNotification({ 
+             text: 'Tu pago se está procesando. Te avisaremos cuando se acredite.', 
+             type: 'success' 
+         });
+         return;
       }
 
-      // CASO 3: PAGO APROBADO -> VERIFICACIÓN EN BACKEND
-      setVerifyingPayment(true);
-      // Timer de seguridad por si la Edge Function tarda demasiado
-      const safetyTimer = setTimeout(() => setShowForceExit(true), 12000);
+      // LUZ VERDE: Aprobado (Requiere payment_id)
+      if (paymentId && (status === 'approved' || status === 'success')) {
+          setVerifyingPayment(true);
+          const safetyTimer = setTimeout(() => setShowForceExit(true), 12000);
 
-      try {
-        console.log("🔄 [Payment] Invocando Edge Function verify-payment-v1...");
-        
-        // Llamamos a la función. NO dependemos de la sesión del frontend para esto.
-        const { data: responseData, error: funcError } = await supabase.functions.invoke('verify-payment-v1', {
-            body: { payment_id: paymentId }
-        });
-
-        if (funcError) throw new Error(`Error de conexión con servidor: ${funcError.message}`);
-        
-        console.log("📩 [Payment] Respuesta Edge Function:", responseData);
-
-        if (!responseData?.success) {
-            throw new Error(responseData?.error || 'La validación del pago falló en el servidor.');
-        }
-
-        // --- ÉXITO TOTAL ---
-        console.log("✅ [Payment] Pago validado y DB actualizada.");
-        setNotification({ text: '¡Excelente! Tu plan ha sido activado correctamente.', type: 'success' });
-        
-        // --- REDIRECCIÓN INTELIGENTE ---
-        // Verificamos si tenemos sesión ACTIVA en este momento
-        const { data: { session: currentSession } } = await supabase.auth.getSession();
-        
-        if (currentSession) {
-            // Usuario logueado: Actualizamos perfil y vamos al Dashboard
-            await loadProfile(currentSession.user.id);
-            setPage(Page.Dashboard);
-        } else {
-            // Sesión perdida durante el pago: Vamos al Login con mensaje claro
-            console.log("ℹ️ [Payment] Sesión no detectada tras pago. Redirigiendo a Auth.");
-            setNotification({ 
-                text: 'Plan activado exitosamente. Por favor, iniciá sesión para ver los cambios.', 
-                type: 'success' 
+          try {
+            console.log("🔄 [Payment] Verificando en servidor...");
+            
+            // Llamada a Edge Function (Backend Blindado con Service Role)
+            const { data: responseData, error: funcError } = await supabase.functions.invoke('verify-payment-v1', {
+                body: { payment_id: paymentId }
             });
-            setPage(Page.Auth);
-        }
 
-      } catch (err: any) {
-        console.error("❌ [Payment] CRITICAL ERROR:", err);
-        setNotification({ 
-            text: `Hubo un problema confirmando tu plan (${err.message}). Si el dinero se debitó, contactanos.`, 
-            type: 'error' 
-        });
-        setPage(Page.Pricing); // Volvemos a Pricing en caso de error
-      } finally {
-        clearTimeout(safetyTimer);
-        setVerifyingPayment(false);
-        setShowForceExit(false);
+            if (funcError) throw new Error(`Error conexión: ${funcError.message}`);
+            
+            if (!responseData?.success) {
+                throw new Error(responseData?.error || 'Validación fallida en servidor.');
+            }
+
+            console.log("✅ [Payment] Éxito confirmado.");
+            setNotification({ text: '¡Excelente! Plan activado correctamente.', type: 'success' });
+            
+            // Chequeo de sesión post-pago
+            const { data: { session: currentSession } } = await supabase.auth.getSession();
+            
+            if (currentSession) {
+                await loadProfile(currentSession.user.id);
+                setPage(Page.Dashboard);
+            } else {
+                setNotification({ 
+                    text: 'Plan activado. Por favor iniciá sesión para ver los cambios.', 
+                    type: 'success' 
+                });
+                setPage(Page.Auth);
+            }
+
+          } catch (err: any) {
+            console.error("❌ [Payment] Error crítico:", err);
+            setNotification({ 
+                text: `Error confirmando el plan: ${err.message}. Si se debitó, contactanos.`, 
+                type: 'error' 
+            });
+            // En caso de error, mandamos a Pricing para que vea opciones
+            setPage(Page.Pricing);
+          } finally {
+            clearTimeout(safetyTimer);
+            setVerifyingPayment(false);
+            setShowForceExit(false);
+          }
+      } else {
+          // Caso borde: status approved pero sin payment_id
+          setNotification({ text: 'Error en respuesta de Mercado Pago (Faltan datos).', type: 'error' });
       }
     };
 
@@ -193,7 +197,9 @@ const App = () => {
     let mounted = true;
 
     const initApp = async () => {
-      // Solo mostramos loader inicial si NO estamos en medio de una verificación de pago
+      // Solo activamos loading si NO estamos procesando un pago.
+      // Si paymentProcessedRef es true (porque el useEffect anterior corrió primero y detectó params),
+      // entonces NO ponemos loading(true) para no pisar la lógica de semáforo.
       if (!paymentProcessedRef.current) {
           setLoading(true);
       }
@@ -208,27 +214,29 @@ const App = () => {
         
         if (mounted && curSession) {
             setSession(curSession);
-            await loadProfile(curSession.user.id);
+            // Solo cargamos perfil si no estamos verificando pago (para evitar condiciones de carrera)
+            if (!paymentProcessedRef.current) {
+                await loadProfile(curSession.user.id);
+            }
         }
       } catch (err) {
         console.error("Error inicio app:", err);
       } finally {
-        if (mounted) setLoading(false);
+        // Solo apagamos loading si no estamos en medio de una verificación de pago bloqueante
+        if (mounted && !paymentProcessedRef.current) {
+             setLoading(false);
+        }
       }
     };
 
     initApp();
 
-    // Listener de Auth
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       if (!mounted) return;
       
       if (event === 'SIGNED_IN' && newSession) {
         setSession(newSession);
-        // Si estamos verificando pago, NO interrumpimos con loadProfile aquí, ya lo hace el checkUrlForPayment
-        if (!verifyingPayment) {
-            await loadProfile(newSession.user.id);
-        }
+        if (!verifyingPayment) await loadProfile(newSession.user.id);
       } else if (event === 'SIGNED_OUT') {
         setSession(null);
         setProfile(null);
@@ -240,7 +248,7 @@ const App = () => {
         mounted = false;
         authListener.subscription.unsubscribe();
     };
-  }, [loadProfile, verifyingPayment]); // Dependencia verifyingPayment agregada para evitar conflictos
+  }, [loadProfile, verifyingPayment]);
 
   // ==================================================================================
   // 4. RENDER
@@ -264,7 +272,7 @@ const App = () => {
     if (dbData) setAppData(dbData);
   };
 
-  // --- UI BLOQUEANTE DE PAGO ---
+  // UI DE VERIFICACIÓN (Solo aparece con LUZ VERDE)
   if (verifyingPayment) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50 px-4 fixed inset-0 z-[99999]">
       <div className="animate-spin rounded-full h-20 w-20 border-t-4 border-b-4 border-indigo-600 mb-8"></div>
