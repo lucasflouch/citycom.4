@@ -41,6 +41,7 @@ const App = () => {
   // --- REFS (Para control de ejecución única) ---
   const hasInitialized = useRef(false);
   const hasProcessedPayment = useRef(false);
+  const lastSessionIdRef = useRef<string | null>(null); // Guardar el último ID de sesión procesado para evitar loops
 
   // ==================================================================================
   // 1. HELPERS
@@ -78,6 +79,7 @@ const App = () => {
     setSession(null);
     setProfile(null);
     setPage(Page.Home);
+    lastSessionIdRef.current = null;
 
     // 2. Limpieza de Storage
     localStorage.clear();
@@ -220,6 +222,8 @@ const App = () => {
 
             if (initSession) {
                 setSession(initSession);
+                lastSessionIdRef.current = initSession.user.id;
+                
                 if (!isPaymentReturn) {
                    await loadProfile(initSession.user.id);
                 }
@@ -269,7 +273,7 @@ const App = () => {
   }, []); // Dependencias vacías = Se ejecuta una sola vez al montar.
 
   // ==================================================================================
-  // 4. LISTENER DE CAMBIOS DE SESIÓN (OPTIMIZADO)
+  // 4. LISTENER DE CAMBIOS DE SESIÓN (OPTIMIZADO ANTI-LOOP)
   // ==================================================================================
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
@@ -277,11 +281,25 @@ const App = () => {
         
         if (event === 'SIGNED_IN' && newSession) {
              setSession(newSession);
-             // Solo cargamos perfil si no estamos bloqueados verificando un pago
-             if (!verifyingPayment) {
+
+             // Lógica Anti-Loop usando Ref:
+             // Comparamos el ID de la nueva sesión con el último procesado.
+             const isSameUser = lastSessionIdRef.current === newSession.user.id;
+             
+             // Actualizamos el Ref
+             lastSessionIdRef.current = newSession.user.id;
+             
+             // Solo cargamos perfil si es un usuario distinto O si no estamos en medio de un pago (aunque esto último es redundante si el ref funciona, es doble seguridad)
+             // Y crucialmente: Si NO es el mismo usuario.
+             if (!verifyingPayment && !isSameUser) {
+                 console.log("👤 Cambio de sesión detectado. Cargando perfil...");
                  loadProfile(newSession.user.id);
+             } else {
+                 console.log("♻️ Evento SIGNED_IN ignorado (Usuario sin cambios o pago en proceso).");
              }
+
         } else if (event === 'SIGNED_OUT') {
+            lastSessionIdRef.current = null;
             setSession(null);
             setProfile(null);
             setPage(Page.Home);
@@ -291,7 +309,7 @@ const App = () => {
     });
 
     return () => subscription.unsubscribe();
-  }, [loadProfile]); // Removida la dependencia 'verifyingPayment' para estabilidad
+  }, [loadProfile]); // VerifyingPayment removido de dependencias intencionalmente para evitar re-suscripciones.
 
   const refreshData = async () => {
     const dbData = await fetchAppData();

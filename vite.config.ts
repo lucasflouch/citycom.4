@@ -45,31 +45,8 @@ export default defineConfig({
         skipWaiting: true,
         navigateFallback: '/index.html',
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-        // ESTRATEGIA DE CACHÉ SEGURA (CRÍTICO PARA SOLUCIONAR LOGIN/LOGOUT)
-        runtimeCaching: [
-          {
-            // Bloquear caché para Supabase (Auth, DB, Functions)
-            urlPattern: ({ url }) => {
-              return (
-                url.hostname.includes('supabase.co') || 
-                url.pathname.includes('/auth/v1') ||
-                url.pathname.includes('/rest/v1') ||
-                url.pathname.includes('/functions/v1')
-              );
-            },
-            handler: 'NetworkOnly',
-          },
-          {
-            // Bloquear caché para Mercado Pago y APIs locales
-            urlPattern: ({ url }) => {
-              return (
-                url.hostname.includes('mercadopago.com') ||
-                url.pathname.startsWith('/api')
-              );
-            },
-            handler: 'NetworkOnly',
-          }
-        ]
+        // runtimeCaching ELIMINADO: Dejamos que el navegador maneje las peticiones a Supabase/MP
+        // de forma nativa para evitar errores de CORS y bloqueos del Service Worker.
       }
     })
   ],
