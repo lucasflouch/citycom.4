@@ -38,10 +38,16 @@ const App = () => {
   const [selectedComercioId, setSelectedComercioId] = useState<string | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   
-  // --- REFS (Para control de ejecución única) ---
+  // --- REFS (CONTROL DE BUCLES & STALE CLOSURES) ---
   const hasInitialized = useRef(false);
   const hasProcessedPayment = useRef(false);
-  const lastSessionIdRef = useRef<string | null>(null); // Guardar el último ID de sesión procesado para evitar loops
+  const lastSessionIdRef = useRef<string | null>(null); 
+  const verifyingPaymentRef = useRef(false); // Ref espejo para usar dentro de listeners
+
+  // Sincronizar State con Ref
+  useEffect(() => {
+    verifyingPaymentRef.current = verifyingPayment;
+  }, [verifyingPayment]);
 
   // ==================================================================================
   // 1. HELPERS
@@ -69,34 +75,35 @@ const App = () => {
   }, []);
 
   // --- LOGOUT NUCLEAR ---
-  // Limpia absolutamente todo rastro de sesión para evitar problemas de caché PWA
   const handleLogout = useCallback(async () => {
     try {
         await supabase.auth.signOut();
     } catch (e) { console.warn("Error signing out supabase", e); }
 
-    // 1. Limpieza de Estado React
     setSession(null);
     setProfile(null);
     setPage(Page.Home);
     lastSessionIdRef.current = null;
 
-    // 2. Limpieza de Storage
     localStorage.clear();
     sessionStorage.clear();
 
-    // 3. Limpieza de Cachés (Service Worker)
     if ('caches' in window) {
         try {
             const keys = await caches.keys();
             await Promise.all(keys.map(key => caches.delete(key)));
-            console.log("🧹 Cachés limpiadas exitosamente.");
-        } catch (e) {
-            console.warn("⚠️ Error limpiando cachés:", e);
-        }
+        } catch (e) { console.warn("Error cleaning cache:", e); }
+    }
+    
+    // Desregistrar SW si existe manualmente
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function(registrations) {
+            for(let registration of registrations) {
+                registration.unregister();
+            }
+        });
     }
 
-    // 4. Hard Reload para reiniciar la aplicación limpia
     window.location.reload();
   }, []);
 
@@ -125,22 +132,18 @@ const App = () => {
   };
 
   // ==================================================================================
-  // 2. LÓGICA DE RETORNO DE PAGO (Dedicada & Protegida)
+  // 2. LÓGICA DE RETORNO DE PAGO
   // ==================================================================================
   const processPaymentReturn = async (paymentId: string | null, status: string | null, currentSession: Session | null) => {
     console.log("💳 [Payment] Iniciando procesamiento...", { paymentId, status });
     
-    // 1. Limpieza Segura de URL (History API)
     try {
         const url = new URL(window.location.href);
         const paramsToRemove = ['collection_id', 'collection_status', 'payment_id', 'status', 'external_reference', 'merchant_order_id', 'preference_id', 'site_id', 'processing_mode', 'merchant_account_id'];
         paramsToRemove.forEach(p => url.searchParams.delete(p));
         window.history.replaceState(null, '', url.toString());
-    } catch (e) {
-        console.warn("⚠️ No se pudo limpiar la URL:", e);
-    }
+    } catch (e) { console.warn("⚠️ URL Cleanup failed:", e); }
 
-    // A. Casos de Fallo
     if (status === 'failure' || status === 'rejected' || status === 'null') {
         setNotification({ text: 'El pago no se completó o fue cancelado.', type: 'error' });
         setPage(Page.Pricing); 
@@ -152,12 +155,10 @@ const App = () => {
         return;
     }
 
-    // B. Caso Éxito (Approved)
     if (paymentId && (status === 'approved' || status === 'success')) {
-        setVerifyingPayment(true);
+        setVerifyingPayment(true); // Activa el Ref via useEffect
         setPaymentStatusText("Verificando transacción con Mercado Pago...");
         
-        // Timeout de seguridad reducido a 10s para mejor UX
         const safetyTimer = setTimeout(() => setShowForceExit(true), 10000);
 
         try {
@@ -193,10 +194,9 @@ const App = () => {
   };
 
   // ==================================================================================
-  // 3. EFECTO DE INICIALIZACIÓN (SECUENCIAL & ÚNICO)
+  // 3. EFECTO DE INICIALIZACIÓN
   // ==================================================================================
   useEffect(() => {
-    // Si ya inicializó, salimos inmediatamente.
     if (hasInitialized.current) return;
     hasInitialized.current = true;
 
@@ -207,8 +207,6 @@ const App = () => {
         const paymentId = params.get('payment_id');
         const status = params.get('status') || params.get('collection_status');
         const isPaymentReturn = !!(paymentId || status);
-
-        if (isPaymentReturn) console.log("Modo: Retorno de Pago");
 
         let sessionRef: Session | null = null;
 
@@ -229,11 +227,8 @@ const App = () => {
                 }
             }
 
-            // --- GUARDIA CRÍTICA: RETORNO DE PAGO SIN SESIÓN ---
             if (isPaymentReturn) {
                 if (!initSession) {
-                    console.warn("⚠️ Retorno de pago sin sesión activa (Browser Kill).");
-                    // Limpiamos URL para no confundir
                     const url = new URL(window.location.href);
                     const paramsToRemove = ['collection_id', 'collection_status', 'payment_id', 'status', 'external_reference'];
                     paramsToRemove.forEach(p => url.searchParams.delete(p));
@@ -245,7 +240,7 @@ const App = () => {
                     });
                     setPage(Page.Auth);
                     setIsInitializing(false);
-                    return; // Detenemos el proceso de pago
+                    return; 
                 }
 
                 if (!hasProcessedPayment.current) {
@@ -270,46 +265,55 @@ const App = () => {
     };
 
     initApp();
-  }, []); // Dependencias vacías = Se ejecuta una sola vez al montar.
+  }, []);
 
   // ==================================================================================
-  // 4. LISTENER DE CAMBIOS DE SESIÓN (OPTIMIZADO ANTI-LOOP)
+  // 4. LISTENER DE SESIÓN (Blindado contra Bucles Infinitos - Versión ID Check)
   // ==================================================================================
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
         console.log(`🔐 Auth Event: ${event}`);
         
         if (event === 'SIGNED_IN' && newSession) {
-             setSession(newSession);
+             const currentUserId = lastSessionIdRef.current;
+             const newUserId = newSession.user.id;
 
-             // Lógica Anti-Loop usando Ref:
-             // Comparamos el ID de la nueva sesión con el último procesado.
-             const isSameUser = lastSessionIdRef.current === newSession.user.id;
-             
-             // Actualizamos el Ref
-             lastSessionIdRef.current = newSession.user.id;
-             
-             // Solo cargamos perfil si es un usuario distinto O si no estamos en medio de un pago (aunque esto último es redundante si el ref funciona, es doble seguridad)
-             // Y crucialmente: Si NO es el mismo usuario.
-             if (!verifyingPayment && !isSameUser) {
-                 console.log("👤 Cambio de sesión detectado. Cargando perfil...");
-                 loadProfile(newSession.user.id);
-             } else {
-                 console.log("♻️ Evento SIGNED_IN ignorado (Usuario sin cambios o pago en proceso).");
+             // CASO A: Nuevo usuario o inicio de sesión real
+             if (currentUserId !== newUserId) {
+                 console.log(`👤 Cambio de usuario detectado (${currentUserId} -> ${newUserId}). Cargando perfil...`);
+                 
+                 lastSessionIdRef.current = newUserId;
+                 setSession(newSession);
+
+                 // Importante: No cargar perfil si estamos en medio de una verificación de pago
+                 // (ya que processPaymentReturn lo hace manualmente)
+                 if (!verifyingPaymentRef.current) {
+                     await loadProfile(newUserId);
+                 }
+             } 
+             // CASO B: Mismo usuario (Refresh de token, update de DB, refocus de ventana)
+             else {
+                 console.log("♻️ Evento SIGNED_IN ignorado (Mismo ID de usuario). Evitando recarga de perfil.");
+                 // Actualizamos la sesión en el estado por si cambió el token (mantiene la sesión viva)
+                 // pero NO disparamos loadProfile().
+                 setSession(newSession); 
              }
 
         } else if (event === 'SIGNED_OUT') {
+            console.log("👋 Usuario cerró sesión.");
             lastSessionIdRef.current = null;
             setSession(null);
             setProfile(null);
             setPage(Page.Home);
         } else if (event === 'TOKEN_REFRESHED' && newSession) {
+            console.log("🔄 Token refrescado.");
             setSession(newSession); 
+            // NO cargamos perfil aquí.
         }
     });
 
     return () => subscription.unsubscribe();
-  }, [loadProfile]); // VerifyingPayment removido de dependencias intencionalmente para evitar re-suscripciones.
+  }, [loadProfile]); // CRÍTICO: NO incluir 'session' aquí.
 
   const refreshData = async () => {
     const dbData = await fetchAppData();
