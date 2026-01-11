@@ -38,8 +38,9 @@ const App = () => {
   const [selectedComercioId, setSelectedComercioId] = useState<string | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   
-  // --- REFS (Para evitar loops) ---
+  // --- REFS (Para control de ejecución única) ---
   const hasInitialized = useRef(false);
+  const hasProcessedPayment = useRef(false);
 
   // ==================================================================================
   // 1. HELPERS
@@ -66,12 +67,35 @@ const App = () => {
     }
   }, []);
 
+  // --- LOGOUT NUCLEAR ---
+  // Limpia absolutamente todo rastro de sesión para evitar problemas de caché PWA
   const handleLogout = useCallback(async () => {
+    try {
+        await supabase.auth.signOut();
+    } catch (e) { console.warn("Error signing out supabase", e); }
+
+    // 1. Limpieza de Estado React
     setSession(null);
     setProfile(null);
     setPage(Page.Home);
-    localStorage.removeItem('sb-sqmjnynklpwjceyuyemz-auth-token');
-    await supabase.auth.signOut();
+
+    // 2. Limpieza de Storage
+    localStorage.clear();
+    sessionStorage.clear();
+
+    // 3. Limpieza de Cachés (Service Worker)
+    if ('caches' in window) {
+        try {
+            const keys = await caches.keys();
+            await Promise.all(keys.map(key => caches.delete(key)));
+            console.log("🧹 Cachés limpiadas exitosamente.");
+        } catch (e) {
+            console.warn("⚠️ Error limpiando cachés:", e);
+        }
+    }
+
+    // 4. Hard Reload para reiniciar la aplicación limpia
+    window.location.reload();
   }, []);
 
   const handleNavigate = (newPage: PageValue, entity?: Comercio | Conversation) => {
@@ -88,32 +112,36 @@ const App = () => {
     window.scrollTo(0, 0);
   };
 
+  const resolveInitialPage = () => {
+    const path = window.location.pathname.toLowerCase();
+    if (path.includes('/dashboard')) return Page.Dashboard;
+    if (path.includes('/pricing')) return Page.Pricing;
+    if (path.includes('/mensajes')) return Page.Messages;
+    if (path.includes('/perfil')) return Page.Profile;
+    if (path.includes('/admin')) return Page.Admin;
+    return Page.Home;
+  };
+
   // ==================================================================================
-  // 2. LÓGICA DE RETORNO DE PAGO (Dedicada)
+  // 2. LÓGICA DE RETORNO DE PAGO (Dedicada & Protegida)
   // ==================================================================================
   const processPaymentReturn = async (paymentId: string | null, status: string | null, currentSession: Session | null) => {
     console.log("💳 [Payment] Iniciando procesamiento...", { paymentId, status });
     
-    // CRITICAL FIX: Sanitizar pathname para evitar SecurityError por dobles slashes (//path)
-    // que los navegadores interpretan como protocol-relative URLs (https://path)
-    const cleanPath = window.location.pathname.replace(/\/+/g, '/') || '/';
-    
+    // 1. Limpieza Segura de URL (History API)
     try {
-        window.history.replaceState(null, '', cleanPath);
+        const url = new URL(window.location.href);
+        const paramsToRemove = ['collection_id', 'collection_status', 'payment_id', 'status', 'external_reference', 'merchant_order_id', 'preference_id', 'site_id', 'processing_mode', 'merchant_account_id'];
+        paramsToRemove.forEach(p => url.searchParams.delete(p));
+        window.history.replaceState(null, '', url.toString());
     } catch (e) {
-        console.warn("⚠️ No se pudo limpiar la URL (History API error):", e);
+        console.warn("⚠️ No se pudo limpiar la URL:", e);
     }
 
-    // Si no hay sesión, intentamos recuperar el estado
-    if (!currentSession) {
-        console.warn("⚠️ [Payment] Retorno de pago sin sesión activa. El backend procesará, pero la UI puede no actualizarse.");
-        // Nota: La Edge Function actualizará la DB usando el ID en metadata.
-    }
-
-    // A. Casos de Fallo o Pendiente
+    // A. Casos de Fallo
     if (status === 'failure' || status === 'rejected' || status === 'null') {
         setNotification({ text: 'El pago no se completó o fue cancelado.', type: 'error' });
-        setPage(currentSession ? Page.Pricing : Page.Auth);
+        setPage(Page.Pricing); 
         return;
     }
     if (status === 'pending' || status === 'in_process') {
@@ -127,11 +155,10 @@ const App = () => {
         setVerifyingPayment(true);
         setPaymentStatusText("Verificando transacción con Mercado Pago...");
         
-        // Timer de seguridad por si el backend tarda mucho
-        const safetyTimer = setTimeout(() => setShowForceExit(true), 15000);
+        // Timeout de seguridad reducido a 10s para mejor UX
+        const safetyTimer = setTimeout(() => setShowForceExit(true), 10000);
 
         try {
-            // 1. Llamada a Edge Function
             const { data: responseData, error: funcError } = await supabase.functions.invoke('verify-payment-v1', {
                 body: { payment_id: paymentId }
             });
@@ -141,7 +168,6 @@ const App = () => {
 
             setPaymentStatusText("¡Pago confirmado! Actualizando tu perfil...");
 
-            // 2. Recarga forzada del perfil para reflejar el nuevo plan
             if (currentSession) {
                 await loadProfile(currentSession.user.id);
             }
@@ -152,7 +178,7 @@ const App = () => {
         } catch (err: any) {
             console.error("❌ Payment Verification Error:", err);
             setNotification({ 
-                text: `Hubo un error verificando el pago: ${err.message}. Si se debitó, contactá a soporte.`, 
+                text: `El pago se procesó pero hubo un error verificando: ${err.message}. Contactá a soporte si no ves tu plan actualizado.`, 
                 type: 'error' 
             });
             setPage(Page.Dashboard);
@@ -165,97 +191,107 @@ const App = () => {
   };
 
   // ==================================================================================
-  // 3. EFECTO DE INICIALIZACIÓN (SECUENCIAL)
+  // 3. EFECTO DE INICIALIZACIÓN (SECUENCIAL & ÚNICO)
   // ==================================================================================
   useEffect(() => {
+    // Si ya inicializó, salimos inmediatamente.
     if (hasInitialized.current) return;
     hasInitialized.current = true;
 
     const initApp = async () => {
         console.group("🚀 App Initialization");
         
-        // 1. Chequear parámetros de URL (antes de cualquier cosa async)
         const params = new URLSearchParams(window.location.search);
         const paymentId = params.get('payment_id');
         const status = params.get('status') || params.get('collection_status');
         const isPaymentReturn = !!(paymentId || status);
 
-        if (isPaymentReturn) {
-            console.log("Detectado retorno de pago. Modo inicialización especial.");
-        }
+        if (isPaymentReturn) console.log("Modo: Retorno de Pago");
+
+        let sessionRef: Session | null = null;
 
         try {
-            // 2. Cargar Datos Públicos
             const dbData = await fetchAppData();
             if (dbData) setAppData(dbData);
 
-            // 3. Recuperar Sesión
             const { data: { session: initSession }, error } = await supabase.auth.getSession();
             if (error) console.warn("Error getting session:", error);
+            sessionRef = initSession;
 
-            let currentProfile = null;
             if (initSession) {
                 setSession(initSession);
-                // Si NO es un retorno de pago, cargamos el perfil ya.
-                // Si ES un retorno, esperamos a la función processPaymentReturn para cargarlo fresco.
                 if (!isPaymentReturn) {
-                    currentProfile = await loadProfile(initSession.user.id);
+                   await loadProfile(initSession.user.id);
                 }
             }
 
-            // 4. Decisiones de Navegación Inicial
+            // --- GUARDIA CRÍTICA: RETORNO DE PAGO SIN SESIÓN ---
             if (isPaymentReturn) {
-                // Delegamos al procesador de pagos
-                await processPaymentReturn(paymentId, status, initSession);
+                if (!initSession) {
+                    console.warn("⚠️ Retorno de pago sin sesión activa (Browser Kill).");
+                    // Limpiamos URL para no confundir
+                    const url = new URL(window.location.href);
+                    const paramsToRemove = ['collection_id', 'collection_status', 'payment_id', 'status', 'external_reference'];
+                    paramsToRemove.forEach(p => url.searchParams.delete(p));
+                    window.history.replaceState(null, '', url.toString());
+
+                    setNotification({ 
+                        text: 'Tu sesión expiró durante el pago. Por favor, iniciá sesión para verificar tu plan.', 
+                        type: 'error' 
+                    });
+                    setPage(Page.Auth);
+                    setIsInitializing(false);
+                    return; // Detenemos el proceso de pago
+                }
+
+                if (!hasProcessedPayment.current) {
+                    hasProcessedPayment.current = true;
+                    await processPaymentReturn(paymentId, status, initSession);
+                }
             } else {
-                // Flujo normal
                 setIsInitializing(false);
-                if (initSession && currentProfile) {
-                    // Si ya estaba en una página protegida, lo dejamos (o mandamos a dashboard)
-                    // Por simplicidad en MVP, si hay sesión vamos a dashboard si estabamos en root
-                    if (window.location.pathname === '/' || window.location.pathname === '/auth') {
-                         setPage(Page.Dashboard);
-                    }
+                if (initSession) {
+                    setPage(resolveInitialPage());
                 }
             }
 
         } catch (err) {
             console.error("Fatal init error:", err);
+            if (sessionRef) await loadProfile(sessionRef.user.id);
             setIsInitializing(false);
         } finally {
-            // Aseguramos quitar el loading si no estamos verificando pago
-            if (!isPaymentReturn) {
-                setIsInitializing(false);
-            }
+            if (!isPaymentReturn) setIsInitializing(false);
             console.groupEnd();
         }
     };
 
     initApp();
-  }, [loadProfile]);
+  }, []); // Dependencias vacías = Se ejecuta una sola vez al montar.
 
   // ==================================================================================
-  // 4. LISTENER DE CAMBIOS DE SESIÓN (Logout/Login manual)
+  // 4. LISTENER DE CAMBIOS DE SESIÓN (OPTIMIZADO)
   // ==================================================================================
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+        console.log(`🔐 Auth Event: ${event}`);
+        
         if (event === 'SIGNED_IN' && newSession) {
              setSession(newSession);
+             // Solo cargamos perfil si no estamos bloqueados verificando un pago
              if (!verifyingPayment) {
-                 await loadProfile(newSession.user.id);
+                 loadProfile(newSession.user.id);
              }
         } else if (event === 'SIGNED_OUT') {
             setSession(null);
             setProfile(null);
             setPage(Page.Home);
         } else if (event === 'TOKEN_REFRESHED' && newSession) {
-            setSession(newSession); // Mantener token fresco
+            setSession(newSession); 
         }
     });
 
     return () => subscription.unsubscribe();
-  }, [loadProfile, verifyingPayment]);
-
+  }, [loadProfile]); // Removida la dependencia 'verifyingPayment' para estabilidad
 
   const refreshData = async () => {
     const dbData = await fetchAppData();
@@ -274,14 +310,15 @@ const App = () => {
             <div className="flex flex-col items-center justify-center min-h-[50vh]">
                 <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-indigo-600 mb-2"></div>
                 <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Cargando perfil...</p>
-                <button onClick={() => handleLogout()} className="mt-4 text-[10px] text-red-400 underline">Reiniciar</button>
+                <button onClick={() => window.location.reload()} className="mt-8 px-4 py-2 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold uppercase hover:bg-slate-200">
+                    Reintentar
+                </button>
             </div>
         );
     }
     return Component;
   };
 
-  // 1. Pantalla de Bloqueo: Verificando Pago
   if (verifyingPayment) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50 px-4 fixed inset-0 z-[99999]">
       <div className="bg-white p-8 rounded-[2.5rem] shadow-2xl max-w-sm w-full text-center border border-indigo-50 animate-in zoom-in duration-300">
@@ -292,20 +329,15 @@ const App = () => {
             <div className="h-full bg-indigo-500 animate-pulse w-2/3"></div>
         </div>
         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-4">No cierres esta ventana</p>
-        
         {showForceExit && (
-           <button 
-             onClick={() => { setVerifyingPayment(false); setPage(Page.Dashboard); }} 
-             className="mt-6 w-full py-3 bg-red-50 text-red-500 rounded-xl font-black uppercase text-[10px] hover:bg-red-100 transition-colors"
-           >
-             Demora demasiado, omitir
+           <button onClick={() => { setVerifyingPayment(false); setPage(Page.Dashboard); }} className="mt-6 w-full py-3 bg-indigo-50 text-indigo-600 rounded-xl font-black uppercase text-[10px] hover:bg-indigo-100 transition-colors">
+             Demora demasiado, continuar en segundo plano
            </button>
         )}
       </div>
     </div>
   );
 
-  // 2. Pantalla de Carga Inicial
   if (isInitializing) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50">
       <div className="relative">
@@ -318,15 +350,9 @@ const App = () => {
 
   return (
     <div className="bg-slate-50 min-h-screen font-sans relative">
-      {/* Notificaciones Toast Globales */}
       {notification && (
-        <div 
-            onClick={() => setNotification(null)}
-            className={`fixed top-24 left-1/2 -translate-x-1/2 z-[9999] w-[90%] max-w-md px-6 py-4 rounded-3xl shadow-2xl animate-in slide-in-from-top-10 flex items-start gap-4 cursor-pointer border ${notification.type === 'success' ? 'bg-white border-green-500 text-green-700' : 'bg-white border-red-500 text-red-700'}`}
-        >
-            <span className={`text-2xl mt-0.5 ${notification.type === 'success' ? 'text-green-500' : 'text-red-500'}`}>
-                {notification.type === 'success' ? '✓' : '✕'}
-            </span>
+        <div onClick={() => setNotification(null)} className={`fixed top-24 left-1/2 -translate-x-1/2 z-[9999] w-[90%] max-w-md px-6 py-4 rounded-3xl shadow-2xl animate-in slide-in-from-top-10 flex items-start gap-4 cursor-pointer border ${notification.type === 'success' ? 'bg-white border-green-500 text-green-700' : 'bg-white border-red-500 text-red-700'}`}>
+            <span className={`text-2xl mt-0.5 ${notification.type === 'success' ? 'text-green-500' : 'text-red-500'}`}>{notification.type === 'success' ? '✓' : '✕'}</span>
             <div>
                 <p className="font-black uppercase text-[10px] tracking-widest mb-1 opacity-70">{notification.type === 'success' ? 'Éxito' : 'Atención'}</p>
                 <p className="text-sm font-bold leading-tight">{notification.text}</p>
@@ -337,72 +363,15 @@ const App = () => {
       <Header session={session} profile={profile} onNavigate={handleNavigate} onLogout={handleLogout} />
       
       <main className="container mx-auto max-w-7xl px-4 py-8">
-        
         {page === Page.Home && <HomePage onNavigate={handleNavigate} data={appData} />}
-        
-        {page === Page.Auth && (session ? 
-            (profile ? <DashboardPage session={session} profile={profile} onNavigate={handleNavigate} data={appData} refreshData={refreshData}/> : renderProtectedPage(null)) 
-            : <AuthPage onNavigate={handleNavigate} />
-        )}
-        
-        {page === Page.Dashboard && renderProtectedPage(
-          <DashboardPage session={session!} profile={profile!} onNavigate={handleNavigate} data={appData} refreshData={refreshData}/>
-        )}
-
-        {(page === Page.CreateComercio || page === Page.EditComercio) && renderProtectedPage(
-          <CreateComercioPage 
-            session={session!} 
-            profile={profile}
-            onNavigate={handleNavigate} 
-            data={appData} 
-            onComercioCreated={refreshData} 
-            editingComercio={page === Page.EditComercio ? appData.comercios.find(c => c.id === selectedComercioId) : null} 
-          />
-        )}
-
-        {page === Page.ComercioDetail && selectedComercioId && (
-          <ComercioDetailPage 
-            comercioId={selectedComercioId} 
-            appData={appData}
-            onNavigate={handleNavigate} 
-            session={session} 
-            profile={profile} 
-            onReviewSubmitted={refreshData}
-          />
-        )}
-
-         {page === Page.Messages && renderProtectedPage(
-          <MessagesPage 
-            session={session!} 
-            profile={profile!} 
-            appData={appData}
-            onNavigate={handleNavigate}
-            initialConversation={selectedConversation}
-          />
-        )}
-
-        {page === Page.Pricing && renderProtectedPage(
-          <PricingPage 
-            profile={profile!}
-            plans={appData.plans}
-            session={session!}
-            onNavigate={handleNavigate}
-            refreshProfile={() => loadProfile(session!.user.id)}
-          />
-        )}
-        
-        {page === Page.Profile && renderProtectedPage(
-          <ProfilePage 
-            session={session!}
-            profile={profile!}
-            plans={appData.plans}
-            onProfileUpdate={() => loadProfile(session!.user.id)}
-          />
-        )}
-        
-        {page === Page.Admin && session && profile?.is_admin && renderProtectedPage(
-           <AdminPage session={session!} plans={appData.plans} />
-        )}
+        {page === Page.Auth && (session ? (profile ? <DashboardPage session={session} profile={profile} onNavigate={handleNavigate} data={appData} refreshData={refreshData}/> : renderProtectedPage(null)) : <AuthPage onNavigate={handleNavigate} />)}
+        {page === Page.Dashboard && renderProtectedPage(<DashboardPage session={session!} profile={profile!} onNavigate={handleNavigate} data={appData} refreshData={refreshData}/>)}
+        {(page === Page.CreateComercio || page === Page.EditComercio) && renderProtectedPage(<CreateComercioPage session={session!} profile={profile} onNavigate={handleNavigate} data={appData} onComercioCreated={refreshData} editingComercio={page === Page.EditComercio ? appData.comercios.find(c => c.id === selectedComercioId) : null} />)}
+        {page === Page.ComercioDetail && selectedComercioId && (<ComercioDetailPage comercioId={selectedComercioId} appData={appData} onNavigate={handleNavigate} session={session} profile={profile} onReviewSubmitted={refreshData}/>)}
+        {page === Page.Messages && renderProtectedPage(<MessagesPage session={session!} profile={profile!} appData={appData} onNavigate={handleNavigate} initialConversation={selectedConversation}/>)}
+        {page === Page.Pricing && renderProtectedPage(<PricingPage profile={profile!} plans={appData.plans} session={session!} onNavigate={handleNavigate} refreshProfile={() => loadProfile(session!.user.id)}/>)}
+        {page === Page.Profile && renderProtectedPage(<ProfilePage session={session!} profile={profile!} plans={appData.plans} onProfileUpdate={() => loadProfile(session!.user.id)}/>)}
+        {page === Page.Admin && session && profile?.is_admin && renderProtectedPage(<AdminPage session={session!} plans={appData.plans} />)}
       </main>
     </div>
   );
