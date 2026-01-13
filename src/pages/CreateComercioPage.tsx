@@ -79,8 +79,15 @@ const CreateComercioPage: React.FC<CreateComercioPageProps> = ({ session, profil
       if (editingComercio.latitude && editingComercio.longitude) {
         setCoords([editingComercio.latitude, editingComercio.longitude]);
       }
-      const city = data.ciudades.find(c => String(c.id) === String(editingComercio.ciudadId));
-      if (city) setProvinciaId(city.provinciaId);
+      
+      // Intentamos recuperar la provinciaId del comercio guardado, o buscarla si es vieja data
+      if (editingComercio.provinciaId) {
+          setProvinciaId(editingComercio.provinciaId);
+      } else {
+          // Fallback legacy
+          const city = data.ciudades.find(c => String(c.id) === String(editingComercio.ciudadId));
+          if (city) setProvinciaId(city.provinciaId);
+      }
     }
   }, [editingComercio, data.ciudades]);
 
@@ -139,6 +146,10 @@ const CreateComercioPage: React.FC<CreateComercioPageProps> = ({ session, profil
     try {
       const generatedSlug = nombre.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-").replace(/-+/g, "-");
 
+      // CRÍTICO: Obtenemos el nombre real de la ciudad seleccionada
+      const ciudadSeleccionada = localidades.find(c => String(c.id) === String(ciudadId));
+      const nombreCiudadReal = ciudadSeleccionada ? ciudadSeleccionada.nombre : 'Localidad';
+
       const payload = {
         nombre,
         slug: generatedSlug,
@@ -150,6 +161,14 @@ const CreateComercioPage: React.FC<CreateComercioPageProps> = ({ session, profil
         rubro_id: rubroId,
         sub_rub_id: subRubroId,
         ciudad_id: ciudadId,
+        
+        // --- DATA DESNORMALIZADA ---
+        // Guardamos el nombre y la provincia directamente en el comercio
+        // para no depender de la tabla ciudades ni de joins complejos.
+        nombre_ciudad: nombreCiudadReal,
+        provincia_id: provinciaId,
+        // ---------------------------
+
         usuario_id: session.user.id,
         latitude: coords[0],
         longitude: coords[1],

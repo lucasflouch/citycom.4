@@ -1,15 +1,13 @@
 
 import React from 'react';
-import { Comercio, Ciudad, Provincia, Rubro } from '../types';
+import { Comercio, Rubro } from '../types';
 
 interface BusinessCardProps {
   comercio: Comercio;
-  ciudad: Ciudad;
-  provincia: Provincia;
   rubro: Rubro;
 }
 
-const BusinessCard: React.FC<BusinessCardProps> = ({ comercio, ciudad, rubro }) => {
+const BusinessCard: React.FC<BusinessCardProps> = ({ comercio, rubro }) => {
   const rating = comercio.rating || 4.5;
 
   return (
@@ -34,7 +32,8 @@ const BusinessCard: React.FC<BusinessCardProps> = ({ comercio, ciudad, rubro }) 
         </div>
         
         <p className="text-gray-400 text-[11px] font-semibold flex items-center gap-1.5 mb-3 uppercase tracking-wider">
-          <span className="text-indigo-500">📍</span> {ciudad.nombre}
+          {/* Se usa el nombre de ciudad almacenado en el comercio */}
+          <span className="text-indigo-500">📍</span> {comercio.nombreCiudad || 'Localidad'}
         </p>
         
         <div className="flex items-center gap-2">

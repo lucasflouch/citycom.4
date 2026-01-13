@@ -26,6 +26,9 @@ const mapComercio = (db: any, reviewsForComercio: Review[] = [], ownerPlan?: Sub
     rubroId: String(db.rubro_id),
     subRubroId: String(db.sub_rub_id),
     ciudadId: String(db.ciudad_id),
+    // FALLBACK: Si es un comercio viejo sin nombre_ciudad, usamos 'Localidad' temporalmente hasta que lo editen.
+    nombreCiudad: db.nombre_ciudad || 'Localidad', 
+    provinciaId: db.provincia_id || '',
     usuarioId: String(db.usuario_id),
     whatsapp: String(db.whatsapp || ''),
     descripcion: db.descripcion || '',
@@ -67,7 +70,8 @@ export const fetchAppData = async (): Promise<AppData | null> => {
     // Usamos Promise.allSettled para que si falla una tabla, no explote todo el inicio
     const results = await Promise.allSettled([
       fetchSafe('provincias', 'nombre'),
-      fetchSafe('ciudades', 'nombre'),
+      // Nota: Seguimos trayendo ciudades si existen para referencia, pero ya no son críticas
+      fetchSafe('ciudades', 'nombre'), 
       fetchSafe('rubros', 'nombre'),
       fetchSafe('sub_rubros', 'nombre'),
       fetchSafe('subscription_plans', 'precio'),

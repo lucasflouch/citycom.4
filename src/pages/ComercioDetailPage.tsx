@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Comercio, Page, PageValue, Review, Profile, AppData, Conversation, Session } from '../types';
+import { Comercio, Page, PageValue, Review, Profile, AppData, Conversation, Session, Ciudad } from '../types';
 import { supabase } from '../supabaseClient';
 import Map from '../components/Map';
 import { findOrCreateConversation } from '../services/chatService';
@@ -27,14 +27,19 @@ const ComercioDetailPage: React.FC<ComercioDetailPageProps> = ({ comercioId, app
 
   useEffect(() => {
     if (comercio) {
-      const ciudad = appData.ciudades.find(c => String(c.id) === String(comercio.ciudadId));
+      // Mock de ciudad para SEO usando la propiedad desnormalizada
+      const ciudadMock: Ciudad = {
+          id: comercio.ciudadId,
+          nombre: comercio.nombreCiudad || 'Argentina',
+          provinciaId: comercio.provinciaId
+      };
       const rubro = appData.rubros.find(r => String(r.id) === String(comercio.rubroId));
-      updateMetaTagsForComercio(comercio, ciudad, rubro);
+      updateMetaTagsForComercio(comercio, ciudadMock, rubro);
     }
     return () => {
       resetMetaTags();
     };
-  }, [comercio, appData.ciudades, appData.rubros]);
+  }, [comercio, appData.rubros]);
 
 
   const showToast = (message: string, duration: number = 3000) => {
@@ -149,7 +154,7 @@ const ComercioDetailPage: React.FC<ComercioDetailPageProps> = ({ comercioId, app
              <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-black uppercase text-slate-800 tracking-tighter italic">Ubicación</h3>
                 <div className="bg-indigo-50 px-4 py-2 rounded-xl text-indigo-600 font-black text-[10px] uppercase tracking-widest border border-indigo-100">
-                  📍 {comercio.direccion || 'Domicilio Verificado'}
+                  📍 {comercio.direccion || 'Domicilio Verificado'} ({comercio.nombreCiudad})
                 </div>
              </div>
              <div className="h-[280px] rounded-[2.5rem] overflow-hidden border border-slate-100 bg-slate-50 relative z-0">

@@ -67,7 +67,9 @@ export interface Comercio {
   imagenes: string[];
   rubroId: string;
   subRubroId: string;
-  ciudadId: string;
+  ciudadId: string; // Mantenemos el ID por referencia
+  nombreCiudad: string; // NUEVO: Nombre desnormalizado para display rápido
+  provinciaId: string;  // NUEVO: ID Provincia desnormalizado para filtros rápidos
   usuarioId: string;
   whatsapp: string;
   descripcion: string;

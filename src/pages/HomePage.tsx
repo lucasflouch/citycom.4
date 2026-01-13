@@ -42,11 +42,16 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigate, data }) => {
 
   const filteredAndSortedComercios = useMemo(() => {
     const filtered = (data.comercios || []).filter(comercio => {
-      const ciudad = data.ciudades.find(c => String(c.id) === String(comercio.ciudadId));
-      if (!ciudad && (filters.provinciaId || filters.ciudadId)) return false;
-
-      const provinciaMatch = !filters.provinciaId || (ciudad && String(ciudad.provinciaId) === String(filters.provinciaId));
+      // FILTRADO OPTIMIZADO (Sin dependencia de tabla ciudades)
+      // Ahora usamos los datos desnormalizados en el objeto comercio.
+      
+      // 1. Filtro Provincia
+      const provinciaMatch = !filters.provinciaId || String(comercio.provinciaId) === String(filters.provinciaId);
+      
+      // 2. Filtro Ciudad (Usamos ciudadId que sigue siendo referencia)
       const ciudadMatch = !filters.ciudadId || String(comercio.ciudadId) === String(filters.ciudadId);
+      
+      // 3. Filtros Rubro
       const rubroMatch = !filters.rubroId || String(comercio.rubroId) === String(filters.rubroId);
       const subRubroMatch = !filters.subRubroId || String(comercio.subRubroId) === String(filters.subRubroId);
 
@@ -55,7 +60,7 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigate, data }) => {
 
     return filtered.sort((a, b) => (b.plan?.precio || 0) - (a.plan?.precio || 0));
 
-  }, [data.comercios, data.ciudades, filters]);
+  }, [data.comercios, filters]);
 
   const featuredComercios = useMemo(() => {
     return (data.comercios || []).filter(c => c.plan?.nombre?.toLowerCase() === 'premium');
@@ -130,7 +135,6 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigate, data }) => {
             {filteredAndSortedComercios.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                 {filteredAndSortedComercios.map((comercio, idx) => {
-                  const ciudad = data.ciudades.find(c => String(c.id) === String(comercio.ciudadId));
                   const rubro = data.rubros.find(r => String(r.id) === String(comercio.rubroId));
                   return (
                     <div 
@@ -141,8 +145,6 @@ const HomePage: React.FC<HomePageProps> = ({ onNavigate, data }) => {
                     >
                       <BusinessCard 
                         comercio={comercio} 
-                        ciudad={ciudad || { id: '', nombre: 'Localidad', provinciaId: '' }} 
-                        provincia={{id:'', nombre:''}}
                         rubro={rubro || { id: '', nombre: '', icon: '🏪', slug: '' }} 
                       />
                     </div>

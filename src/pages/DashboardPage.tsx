@@ -129,14 +129,12 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ session, profile, onNavig
           </div>
         ) : (
           myPublicaciones.map(comercio => {
-            const ciudad = data.ciudades?.find(c => String(c.id) === String(comercio.ciudadId)) || { id: '', nombre: 'Localidad', provinciaId: '' };
-            const provincia = data.provincias?.find(p => String(p.id) === String(ciudad.provinciaId)) || { id: '', nombre: '' };
             const rubro = data.rubros?.find(r => String(r.id) === String(comercio.rubroId)) || { id: '', nombre: 'General', icon: '📍', slug: '' };
 
             return (
               <div key={comercio.id} className="relative group bg-white p-2 rounded-4xl border border-transparent hover:border-indigo-100 transition-all shadow-sm">
                 <div onClick={() => onNavigate(Page.ComercioDetail, comercio)} className="cursor-pointer">
-                  <BusinessCard comercio={comercio} ciudad={ciudad} provincia={provincia} rubro={rubro} />
+                  <BusinessCard comercio={comercio} rubro={rubro} />
                 </div>
                 <div className="mt-4 flex gap-2 p-2 relative z-20">
                   <button 
