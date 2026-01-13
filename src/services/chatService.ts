@@ -32,6 +32,22 @@ export const findOrCreateConversation = async (clienteId: string, comercio: Come
   }
 };
 
+export const countUnreadMessages = async (userId: string): Promise<number> => {
+    try {
+        const { count, error } = await supabase
+            .from('messages')
+            .select('*', { count: 'exact', head: true })
+            .eq('is_read', false)
+            .neq('sender_id', userId); // Contar mensajes que NO envié yo
+
+        if (error) throw error;
+        return count || 0;
+    } catch (e) {
+        console.error("Error contando mensajes no leídos:", e);
+        return 0;
+    }
+};
+
 export const getConversationsForUser = async (userId: string, appData: AppData): Promise<(Conversation & { otherParty: Profile | Comercio })[]> => {
     try {
         const { data: conversations, error } = await supabase

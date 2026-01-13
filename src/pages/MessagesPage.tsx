@@ -144,6 +144,22 @@ const MessagesPage: React.FC<MessagesPageProps> = ({ session, profile, appData, 
      return convo.otherParty.nombre || 'Usuario';
   }
 
+  const isComercio = (entity: any): entity is Comercio => {
+      return 'nombreCiudad' in entity;
+  }
+
+  const getOtherPartyImage = (convo: EnrichedConversation) => {
+      if (isComercio(convo.otherParty)) {
+          return convo.otherParty.imagenUrl;
+      }
+      return null; 
+  }
+
+  const getOtherPartyRole = (convo: EnrichedConversation) => {
+      if (isComercio(convo.otherParty)) return "Comercio Vendedor";
+      return "Cliente";
+  }
+
   return (
     <div className="flex h-[calc(100vh-150px)] bg-white rounded-5xl shadow-soft border border-slate-100 overflow-hidden">
       <div className="w-1/3 border-r border-slate-100 flex flex-col">
@@ -151,45 +167,75 @@ const MessagesPage: React.FC<MessagesPageProps> = ({ session, profile, appData, 
           <h2 className="text-2xl font-black text-slate-900 tracking-tighter">Mensajes</h2>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {loading ? <p className="p-4 text-slate-400">Cargando...</p> : conversations.map(convo => (
-            <div
-              key={convo.id}
-              onClick={() => handleSelectConversation(convo)}
-              className={`p-4 cursor-pointer border-l-4 flex flex-col gap-1 ${activeConversation?.id === convo.id ? 'bg-indigo-50 border-indigo-500' : 'border-transparent hover:bg-slate-50'}`}
-            >
-              <div className="flex justify-between items-center">
-                <h3 className="font-bold text-slate-800">{getOtherPartyName(convo)}</h3>
-                {convo.unreadCount && convo.unreadCount > 0 && (
-                   <span className="bg-indigo-600 text-white text-[10px] font-black w-5 h-5 flex items-center justify-center rounded-full shadow-md">
-                     {convo.unreadCount}
-                   </span>
-                )}
-              </div>
-              <p className={`text-sm truncate ${convo.unreadCount && convo.unreadCount > 0 ? 'text-slate-900 font-bold' : 'text-slate-500'}`}>
-                {convo.last_message || 'Inicia la conversación...'}
-              </p>
-            </div>
-          ))}
+          {loading ? <p className="p-4 text-slate-400">Cargando...</p> : conversations.map(convo => {
+             const isUnread = (convo.unreadCount || 0) > 0;
+             const imageUrl = getOtherPartyImage(convo);
+
+             return (
+                <div
+                key={convo.id}
+                onClick={() => handleSelectConversation(convo)}
+                className={`p-4 cursor-pointer flex gap-3 items-center border-l-4 transition-colors 
+                    ${activeConversation?.id === convo.id 
+                        ? 'bg-indigo-50 border-indigo-600' 
+                        : isUnread 
+                            ? 'bg-red-50 border-red-500' // Resaltado fuerte si no leído
+                            : 'border-transparent hover:bg-slate-50'
+                    }`}
+                >
+                <div className="w-12 h-12 rounded-full bg-slate-200 flex-shrink-0 overflow-hidden">
+                    {imageUrl ? (
+                        <img src={imageUrl} className="w-full h-full object-cover" alt="Avatar"/>
+                    ) : (
+                        <div className="w-full h-full flex items-center justify-center font-bold text-slate-500">
+                            {getOtherPartyName(convo).charAt(0)}
+                        </div>
+                    )}
+                </div>
+                <div className="min-w-0 flex-1">
+                    <div className="flex justify-between items-center mb-1">
+                        <h3 className={`text-sm truncate ${isUnread ? 'font-black text-slate-900' : 'font-bold text-slate-700'}`}>
+                            {getOtherPartyName(convo)}
+                        </h3>
+                        {isUnread && (
+                            <span className="bg-red-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full shadow-sm animate-pulse">
+                                NEW
+                            </span>
+                        )}
+                    </div>
+                    <p className={`text-xs truncate ${isUnread ? 'text-slate-800 font-bold' : 'text-slate-400'}`}>
+                        {convo.last_message || 'Inicia la conversación...'}
+                    </p>
+                </div>
+                </div>
+             )
+          })}
         </div>
       </div>
 
       <div className="w-2/3 flex flex-col">
         {activeConversation ? (
           <>
-            <div className="p-6 border-b border-slate-100 flex items-center gap-4">
-                <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center font-bold text-indigo-600">
-                    {getOtherPartyName(activeConversation)?.charAt(0)}
+            <div className="p-6 border-b border-slate-100 flex items-center gap-4 bg-white/50 backdrop-blur-md">
+                <div className="w-14 h-14 bg-indigo-100 rounded-full flex items-center justify-center font-bold text-indigo-600 overflow-hidden shadow-sm border border-indigo-50">
+                    {getOtherPartyImage(activeConversation) ? (
+                         <img src={getOtherPartyImage(activeConversation)!} className="w-full h-full object-cover" />
+                    ) : (
+                         <span className="text-2xl">{getOtherPartyName(activeConversation)?.charAt(0)}</span>
+                    )}
                 </div>
                 <div>
-                    <h3 className="text-lg font-black text-slate-900">{getOtherPartyName(activeConversation)}</h3>
-                    <p className="text-xs text-green-500 font-bold flex items-center gap-1.5"><span className="w-2 h-2 bg-green-400 rounded-full"></span>Online</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-0.5">
+                        Conversando con {getOtherPartyRole(activeConversation)}
+                    </p>
+                    <h3 className="text-2xl font-black text-slate-900 leading-none">{getOtherPartyName(activeConversation)}</h3>
                 </div>
             </div>
             <div className="flex-1 p-6 overflow-y-auto bg-slate-50">
               <div className="space-y-2">
                 {messages.map(msg => (
                   <div key={msg.id} className={`flex flex-col ${msg.sender_id === session.user.id ? 'items-end' : 'items-start'}`}>
-                    <div className={`max-w-md p-4 rounded-3xl ${msg.sender_id === session.user.id ? 'bg-indigo-600 text-white rounded-br-lg' : 'bg-slate-200 text-slate-800 rounded-bl-lg'}`}>
+                    <div className={`max-w-md p-4 rounded-3xl ${msg.sender_id === session.user.id ? 'bg-indigo-600 text-white rounded-br-lg shadow-indigo' : 'bg-white text-slate-800 rounded-bl-lg shadow-sm border border-slate-100'}`}>
                       <p>{msg.content}</p>
                     </div>
                     <div className="px-2 mt-1 flex items-center gap-2">
@@ -197,7 +243,7 @@ const MessagesPage: React.FC<MessagesPageProps> = ({ session, profile, appData, 
                            {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                        </span>
                        {msg.sender_id === session.user.id && (
-                           <span className={`font-bold text-base leading-none ${msg.is_read ? 'text-indigo-400' : 'text-slate-300'}`}>
+                           <span className={`font-bold text-base leading-none ${msg.is_read ? 'text-indigo-500' : 'text-slate-300'}`}>
                                {msg.is_read ? '✓✓' : '✓'}
                            </span>
                        )}
@@ -214,20 +260,19 @@ const MessagesPage: React.FC<MessagesPageProps> = ({ session, profile, appData, 
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
                   placeholder="Escribe tu mensaje..."
-                  className="w-full p-4 bg-slate-100 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                  className="w-full p-4 bg-slate-100 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
                 />
-                <button type="submit" className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-indigo hover:bg-indigo-700 transition-all">
+                <button type="submit" className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-indigo hover:bg-indigo-700 transition-all active:scale-95">
                   Enviar
                 </button>
               </div>
             </form>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-center text-slate-400">
+          <div className="flex-1 flex items-center justify-center text-center text-slate-400 bg-slate-50">
             <div>
-              <div className="text-5xl mb-4">💬</div>
-              <h3 className="font-bold">Seleccioná una conversación</h3>
-              <p>O iniciá una nueva desde la página de un comercio.</p>
+              <div className="text-6xl mb-4 grayscale opacity-50">💬</div>
+              <h3 className="font-black text-xl text-slate-300 uppercase tracking-widest">Seleccioná un chat</h3>
             </div>
           </div>
         )}

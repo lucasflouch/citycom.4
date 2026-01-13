@@ -3,6 +3,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from './supabaseClient';
 import { Profile, Page, Comercio, PageValue, AppData, Conversation, Session } from './types';
 import { fetchAppData } from './services/dataService';
+import { subscribeToPushNotifications } from './services/notificationService';
+import { countUnreadMessages } from './services/chatService';
 
 import HomePage from './pages/HomePage';
 import AuthPage from './pages/AuthPage';
@@ -14,12 +16,13 @@ import PricingPage from './pages/PricingPage';
 import ProfilePage from './pages/ProfilePage';
 import AdminPage from './pages/AdminPage';
 import Header from './components/Header';
-import NotificationButton from './components/NotificationButton';
+// NotificationButton eliminado por ser molesto, ahora es automático.
 
 const App = () => {
   // --- ESTADO GLOBAL ---
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const [appData, setAppData] = useState<AppData>({
     provincias: [], ciudades: [], rubros: [], subRubros: [],
@@ -76,6 +79,11 @@ const App = () => {
     }
   }, []);
 
+  const refreshUnreadCount = useCallback(async (userId: string) => {
+      const count = await countUnreadMessages(userId);
+      setUnreadCount(count);
+  }, []);
+
   // --- LOGOUT NUCLEAR ---
   const handleLogout = useCallback(async () => {
     try {
@@ -85,6 +93,7 @@ const App = () => {
     setSession(null);
     setProfile(null);
     setPage(Page.Home);
+    setUnreadCount(0);
     lastSessionIdRef.current = null;
 
     localStorage.clear();
@@ -121,6 +130,9 @@ const App = () => {
     }
     setPage(newPage);
     window.scrollTo(0, 0);
+
+    // Al navegar, refrescar conteo de mensajes por si acaso
+    if (session) refreshUnreadCount(session.user.id);
   };
 
   const resolveInitialPage = () => {
@@ -231,6 +243,11 @@ const App = () => {
             if (initSession) {
                 setSession(initSession);
                 lastSessionIdRef.current = initSession.user.id;
+                
+                // NOTIFICACIONES AUTOMÁTICAS: Intentar suscribir al iniciar
+                subscribeToPushNotifications(initSession.user.id);
+                refreshUnreadCount(initSession.user.id);
+
                 if (!isPaymentReturn) await loadProfile(initSession.user.id);
             }
 
@@ -280,6 +297,10 @@ const App = () => {
              if (currentUserId !== newUserId) {
                  lastSessionIdRef.current = newUserId;
                  setSession(newSession);
+                 // NOTIFICACIONES AUTOMÁTICAS: Intentar suscribir al cambiar de usuario
+                 subscribeToPushNotifications(newUserId);
+                 refreshUnreadCount(newUserId);
+
                  if (!verifyingPaymentRef.current && !isInitializingRef.current) {
                      await loadProfile(newUserId);
                  }
@@ -290,6 +311,7 @@ const App = () => {
             lastSessionIdRef.current = null;
             setSession(null);
             setProfile(null);
+            setUnreadCount(0);
             setPage(Page.Home);
         } else if (event === 'TOKEN_REFRESHED' && newSession) {
             setSession(newSession); 
@@ -297,21 +319,32 @@ const App = () => {
     });
 
     return () => subscription.unsubscribe();
-  }, [loadProfile]); 
+  }, [loadProfile, refreshUnreadCount]); 
 
 
   // ==================================================================================
-  // 5. REALTIME DATA LISTENER (NUEVO: SOLUCIÓN PANTALLA EN BLANCO)
+  // 5. REALTIME DATA LISTENER (COMERCIOS Y MENSAJES)
   // ==================================================================================
   useEffect(() => {
-    // Escuchar cambios globales en la tabla de comercios
+    // Escuchar cambios globales
     const channel = supabase.channel('global-changes')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'comercios' },
         (payload) => {
-          console.log('⚡ Cambio detectado en DB (Comercios):', payload.eventType);
+          console.log('⚡ Cambio en Comercios:', payload.eventType);
           refreshData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        (payload) => {
+           // Si llega un mensaje nuevo y estoy logueado, actualizar contador
+           if (session?.user?.id) {
+               console.log('⚡ Nuevo mensaje detectado, actualizando badge...');
+               refreshUnreadCount(session.user.id);
+           }
         }
       )
       .subscribe();
@@ -319,7 +352,7 @@ const App = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [session?.user?.id, refreshUnreadCount]);
 
 
   // ==================================================================================
@@ -384,9 +417,9 @@ const App = () => {
         </div>
       )}
 
-      {session && <NotificationButton userId={session.user.id} />}
+      {/* Eliminado NotificationButton flotante */}
 
-      <Header session={session} profile={profile} onNavigate={handleNavigate} onLogout={handleLogout} />
+      <Header session={session} profile={profile} onNavigate={handleNavigate} onLogout={handleLogout} unreadCount={unreadCount} />
       
       <main className="container mx-auto max-w-7xl px-4 py-8">
         {page === Page.Home && <HomePage onNavigate={handleNavigate} data={appData} />}

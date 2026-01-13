@@ -3,6 +3,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Comercio, Page, PageValue, Review, Profile, AppData, Conversation, Session, Ciudad } from '../types';
 import { supabase } from '../supabaseClient';
 import Map from '../components/Map';
+import ShareButton from '../components/ShareButton';
 import { findOrCreateConversation } from '../services/chatService';
 import { updateMetaTagsForComercio, resetMetaTags } from '../services/seoService';
 
@@ -56,9 +57,17 @@ const ComercioDetailPage: React.FC<ComercioDetailPageProps> = ({ comercioId, app
 
   const handleStartChat = async () => {
     if (!session || !profile) {
-      onNavigate(Page.Auth);
+      showToast("Inicia sesión para chatear.", 2000);
+      setTimeout(() => onNavigate(Page.Auth), 1000);
       return;
     }
+    
+    // Si soy el dueño, no puedo chatear conmigo mismo desde aquí
+    if (session.user.id === comercio.usuarioId) {
+        showToast("Este es tu propio comercio.", 3000);
+        return;
+    }
+
     setChatLoading(true);
     try {
       const conversation = await findOrCreateConversation(session.user.id, comercio);
@@ -202,32 +211,49 @@ const ComercioDetailPage: React.FC<ComercioDetailPageProps> = ({ comercioId, app
           <div className="bg-slate-900 p-8 rounded-[3rem] shadow-2xl text-white sticky top-28">
             <h3 className="text-lg font-black uppercase mb-8 border-b border-white/10 pb-4 tracking-widest italic">Contacto Directo</h3>
             <div className="space-y-4">
-              {session && !isOwner && planAllowsChat && (
+              
+              {/* BOTÓN DE CHAT PROMINENTE */}
+              {!isOwner && planAllowsChat && (
                 <button
                   onClick={handleStartChat}
                   disabled={chatLoading}
-                  className="w-full flex items-center justify-center gap-4 bg-indigo-600 p-5 rounded-2xl font-black hover:scale-[1.03] transition-all group disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-4 bg-white text-indigo-600 p-5 rounded-2xl font-black hover:scale-[1.03] transition-all group disabled:opacity-50 shadow-lg border-b-4 border-indigo-100"
                 >
-                  <span className="text-2xl">💬</span>
-                  <span>{chatLoading ? "Abriendo..." : "Contactar por Chat"}</span>
+                  <span className="text-2xl group-hover:rotate-12 transition-transform">💬</span>
+                  <div className="text-left">
+                    <p className="text-[9px] uppercase opacity-60 tracking-widest text-indigo-400">Mensaje Interno</p>
+                    <p className="text-lg leading-tight">{chatLoading ? "Iniciando..." : "Chat con el Vendedor"}</p>
+                  </div>
                 </button>
               )}
-              <a href={`https://wa.me/${whatsappForLink}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-4 bg-green-500 p-5 rounded-2xl font-black hover:scale-[1.03] transition-all group">
+
+              <a href={`https://wa.me/${whatsappForLink}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-4 bg-green-500 p-5 rounded-2xl font-black hover:scale-[1.03] transition-all group shadow-lg border-b-4 border-green-600">
                 <svg viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 text-white group-hover:scale-110 transition-transform">
-                  <path d="M16.75 13.96c.25.13.41.2.46.3.06.11.04.61-.21 1.18-.2.56-1.24 1.1-1.72 1.18-.5.06-1.02.06-1.57-.15-.56-.22-1.33-.48-2.24-1.05-.93-.56-1.8-1.34-2.54-2.21-.73-.86-1.15-1.75-1.29-2.02-.14-.29-.04-.46.09-.61.12-.14.26-.18.38-.18.11 0 .25 0 .38.01.12.01.29.01.44.3.15.29.23.63.26.69.03.06.03.14 0 .2-.03.06-.06.09-.12.15-.06.06-.12.12-.18.18-.06.06-.12.12-.17.17-.05.05-.1.11-.04.22s.27.46.59.83c.32.37.74.83 1.29 1.18.55.35.93.43 1.09.5.16.06.26.04.36-.04.1-.09.43-.51.55-.69.12-.18.23-.17.39-.1.16.06.94.44 1.1.51.17.09.28.12.31.18.04.06.04.12 0 .18zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"></path>
+                  <path d="M16.75 13.96c.25.13.41.2.46.3.06.11.04.61-.21 1.18-.2.56-1.24 1.1-1.72 1.18-.5.06-1.02.06-1.57-.15-.56-.22-1.33-.48-2.24-1.05-.93-.56-1.8-1.34-2.54-2.21-.73-.86-1.15-1.75-1.29-2.02-.14-.29-.04-.46.09-.61.12-.14.26-.18.38-.18.11 0 .25 0 .38.01.12.01.29.01.44.3.15.29.23.63.26.69.03.06.03.14 0 .2-.03.06-.06.09-.12.15-.06.06-.12.12-.18.18-.06.06-.12.12-.17.17-.05.05-.1.11-.04.22s.27.46.59.83c.32.37.74.83 1.29 1.18.55.35.93.43 1.09.5.16.06.26.04.36-.04.1-.09.43-.51.55-.69.12-.18.23-.17.39-.1.16.06.94.44 1.1.51.17.09.28.12.31.18.04.06.04.12 0 .18zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8-8 8z"></path>
                 </svg>
                 <div className="text-left">
-                  <p className="text-[10px] font-bold uppercase opacity-80 tracking-widest">WhatsApp</p>
-                  <p className="text-lg leading-tight">Enviar Mensaje</p>
+                  <p className="text-[9px] font-bold uppercase opacity-80 tracking-widest">Externo</p>
+                  <p className="text-lg leading-tight">WhatsApp Directo</p>
                 </div>
               </a>
-              <a href={`tel:${comercio.whatsapp}`} className="flex items-center gap-5 bg-indigo-600 p-5 rounded-2xl font-black hover:scale-[1.03] transition-all group">
+
+              <a href={`tel:${comercio.whatsapp}`} className="flex items-center gap-5 bg-indigo-600 p-5 rounded-2xl font-black hover:scale-[1.03] transition-all group shadow-lg">
                 <span className="text-2xl group-hover:rotate-12 transition-transform">📞</span>
                 <div className="text-left">
-                  <p className="text-[8px] uppercase opacity-60 tracking-widest">Teléfono</p>
+                  <p className="text-[8px] uppercase opacity-60 tracking-widest">Llamada</p>
                   <p>{comercio.whatsapp}</p>
                 </div>
               </a>
+
+              {/* BOTÓN COMPARTIR: RECOMENDAR ESTE LUGAR */}
+              <ShareButton 
+                title={`Mirá ${comercio.nombre}`}
+                text={`¡Che, mirá este lugar que encontré en la Guía Comercial! Se llama ${comercio.nombre}.`}
+                url={`?comercio=${comercio.id}`} // En una app real usaríamos rutas limpias, aquí query param o hash es manejado por el routing básico.
+                variant="block"
+                label="Recomendar este lugar"
+              />
+
             </div>
             <p className="mt-8 text-[9px] text-white/40 font-black uppercase text-center tracking-[0.3em]">
               ID PUBLICACIÓN: {comercio.id.slice(0,8)}

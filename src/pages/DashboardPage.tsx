@@ -2,6 +2,7 @@
 import React, { useMemo, useState } from 'react';
 import { Profile, Page, PageValue, AppData, Comercio, SubscriptionPlan, Session } from '../types';
 import BusinessCard from '../components/BusinessCard';
+import ShareButton from '../components/ShareButton';
 import { supabase } from '../supabaseClient';
 
 interface DashboardPageProps {
@@ -136,7 +137,19 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ session, profile, onNavig
                 <div onClick={() => onNavigate(Page.ComercioDetail, comercio)} className="cursor-pointer">
                   <BusinessCard comercio={comercio} rubro={rubro} />
                 </div>
-                <div className="mt-4 flex gap-2 p-2 relative z-20">
+                
+                <div className="px-2 pt-2">
+                    <ShareButton 
+                        title={comercio.nombre}
+                        text={`¡Hola! Encontranos en Guía Comercial. Somos ${comercio.nombre}. Visitá nuestro perfil:`}
+                        url={`?comercio=${comercio.id}`}
+                        variant="outline"
+                        label="Promocionar"
+                        className="w-full mb-2 border-dashed !border-indigo-200 !text-indigo-500 hover:!bg-indigo-50"
+                    />
+                </div>
+
+                <div className="flex gap-2 p-2 pt-0 relative z-20">
                   <button 
                     onClick={(e) => handleEdit(e, comercio)}
                     className="flex-1 bg-slate-50 text-slate-900 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 hover:text-white transition-all shadow-sm active:scale-95 border border-slate-100"
