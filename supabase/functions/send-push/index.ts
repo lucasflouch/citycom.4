@@ -1,3 +1,4 @@
+
 // @ts-ignore
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 // @ts-ignore
@@ -19,6 +20,8 @@ serve(async (req: Request) => {
 
   try {
     const { title, body, url, userIds } = await req.json()
+    
+    console.log(`📨 [Push] Iniciando envío a ${userIds.length} usuarios. Msg: "${title}"`);
 
     // 1. Configuración VAPID (Las llaves deben estar en Secrets)
     const subject = Deno.env.get('VAPID_MAILTO')
@@ -26,10 +29,16 @@ serve(async (req: Request) => {
     const privateKey = Deno.env.get('VAPID_PRIVATE_KEY')
 
     if (!subject || !publicKey || !privateKey) {
-      throw new Error('Faltan configurar los secretos VAPID en Supabase.')
+      console.error("❌ Faltan credenciales VAPID en Secrets");
+      throw new Error('Configuración VAPID incompleta en el servidor.')
     }
 
-    webpush.setVapidDetails(subject, publicKey, privateKey)
+    try {
+        webpush.setVapidDetails(subject, publicKey, privateKey)
+    } catch (err) {
+        console.error("❌ Error configurando VAPID:", err);
+        throw err;
+    }
 
     // 2. Conectar a Supabase (Admin)
     const supabaseAdmin = createClient(
@@ -43,16 +52,24 @@ serve(async (req: Request) => {
       .select('*')
       .in('user_id', userIds)
 
-    if (error) throw error
+    if (error) {
+        console.error("❌ Error leyendo suscripciones:", error);
+        throw error
+    }
+
     if (!subscriptions || subscriptions.length === 0) {
-      return new Response(JSON.stringify({ message: 'No subscriptions found' }), {
+      console.warn("⚠️ No se encontraron suscripciones para los usuarios:", userIds);
+      return new Response(JSON.stringify({ message: 'No subscriptions found', count: 0 }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
+    console.log(`✅ Encontradas ${subscriptions.length} suscripciones.`);
+
     // 4. Enviar notificaciones
     const payload = JSON.stringify({ title, body, url })
-    const promises = subscriptions.map((sub: any) => {
+    
+    const results = await Promise.allSettled(subscriptions.map((sub: any) => {
       const pushSubscription = {
         endpoint: sub.endpoint,
         keys: {
@@ -61,24 +78,37 @@ serve(async (req: Request) => {
         },
       }
       return webpush.sendNotification(pushSubscription, payload)
-        .catch((err: any) => {
+    }));
+
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (const [index, result] of results.entries()) {
+        const sub = subscriptions[index];
+        if (result.status === 'fulfilled') {
+            console.log(`✅ Push enviado a ${sub.id} (Status: ${result.value.statusCode})`);
+            successCount++;
+        } else {
+            const err = result.reason;
+            console.error(`❌ Falló push a ${sub.id}:`, err);
+            failureCount++;
+
             if (err.statusCode === 410 || err.statusCode === 404) {
-                // La suscripción expiró, borrarla
-                console.log(`Borrando suscripción expirada: ${sub.id}`)
-                return supabaseAdmin.from('push_subscriptions').delete().eq('id', sub.id)
+                console.log(`🧹 Eliminando suscripción muerta: ${sub.id}`);
+                await supabaseAdmin.from('push_subscriptions').delete().eq('id', sub.id);
             }
-            console.error('Error enviando push:', err)
-        })
-    })
+        }
+    }
 
-    await Promise.all(promises)
+    console.log(`🏁 Resumen: ${successCount} enviados, ${failureCount} fallidos.`);
 
-    return new Response(JSON.stringify({ success: true, count: promises.length }), {
+    return new Response(JSON.stringify({ success: true, sent: successCount, failed: failureCount }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 200,
     })
 
   } catch (error: any) {
+    console.error("🚨 Error Crítico en Edge Function:", error);
     return new Response(JSON.stringify({ error: error.message }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 500,

@@ -158,21 +158,23 @@ export const sendMessage = async (conversationId: string, senderId: string, cont
     if (convError) throw convError;
 
     // --- TRIGGER NOTIFICACIÓN PUSH ---
-    // Determinamos quién es el destinatario
     if (convData) {
         const participants = convData.participant_ids as string[];
         const receiverId = participants.find(id => id !== senderId);
         
         if (receiverId) {
-            // Invocamos la Edge Function 'send-push' de forma asíncrona (no bloqueamos el UI)
+            console.log(`📤 Intentando enviar push a ${receiverId}`);
+            // Invocamos la Edge Function 'send-push' de forma asíncrona
             supabase.functions.invoke('send-push', {
                 body: {
                     title: 'Nuevo Mensaje 💬',
                     body: content.length > 30 ? content.substring(0, 30) + '...' : content,
-                    url: '/mensajes', // Deep link a la página de mensajes
+                    url: '/mensajes', 
                     userIds: [receiverId]
                 }
-            }).catch(err => console.error("Error enviando push trigger:", err));
+            })
+            .then(res => console.log("📬 Push Trigger Response:", res))
+            .catch(err => console.error("❌ Error enviando push trigger:", err));
         }
     }
 

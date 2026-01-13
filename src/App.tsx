@@ -14,7 +14,7 @@ import PricingPage from './pages/PricingPage';
 import ProfilePage from './pages/ProfilePage';
 import AdminPage from './pages/AdminPage';
 import Header from './components/Header';
-import NotificationButton from './components/NotificationButton'; // Importación Nueva
+import NotificationButton from './components/NotificationButton';
 
 const App = () => {
   // --- ESTADO GLOBAL ---
@@ -44,7 +44,7 @@ const App = () => {
   const hasProcessedPayment = useRef(false);
   const lastSessionIdRef = useRef<string | null>(null); 
   const verifyingPaymentRef = useRef(false); 
-  const isInitializingRef = useRef(true); // Guard para bloquear listeners durante el boot
+  const isInitializingRef = useRef(true); 
 
   // Sincronizar State con Ref
   useEffect(() => {
@@ -133,6 +133,12 @@ const App = () => {
     return Page.Home;
   };
 
+  const refreshData = async () => {
+    console.log("🔄 Actualizando datos de la app...");
+    const dbData = await fetchAppData();
+    if (dbData) setAppData(dbData);
+  };
+
   // ==================================================================================
   // 2. LÓGICA DE RETORNO DE PAGO
   // ==================================================================================
@@ -146,19 +152,13 @@ const App = () => {
         window.history.replaceState(null, '', url.toString());
     } catch (e) { console.warn("⚠️ URL Cleanup failed:", e); }
 
-    // CASO DE FALLO O CANCELACIÓN
     if (status === 'failure' || status === 'rejected' || status === 'null') {
-        if (currentSession?.user?.id) {
-             console.log("💳 Pago fallido. Cargando perfil existente para evitar bloqueo UI...");
-             await loadProfile(currentSession.user.id);
-        }
-        
+        if (currentSession?.user?.id) await loadProfile(currentSession.user.id);
         setNotification({ text: 'El pago no se completó o fue cancelado.', type: 'error' });
         setPage(Page.Pricing); 
         return;
     }
     
-    // CASO PENDIENTE
     if (status === 'pending' || status === 'in_process') {
          if (currentSession?.user?.id) await loadProfile(currentSession.user.id);
          setNotification({ text: 'Pago pendiente. Se activará al acreditarse.', type: 'success' });
@@ -166,11 +166,9 @@ const App = () => {
          return;
     }
 
-    // CASO ÉXITO
     if (paymentId && (status === 'approved' || status === 'success')) {
         setVerifyingPayment(true);
         setPaymentStatusText("Verificando transacción con Mercado Pago...");
-        
         const safetyTimer = setTimeout(() => setShowForceExit(true), 10000);
 
         try {
@@ -183,9 +181,7 @@ const App = () => {
 
             setPaymentStatusText("¡Pago confirmado! Actualizando tu perfil...");
 
-            if (currentSession) {
-                await loadProfile(currentSession.user.id);
-            }
+            if (currentSession) await loadProfile(currentSession.user.id);
 
             setNotification({ text: '¡Plan activado correctamente!', type: 'success' });
             setPage(Page.Dashboard);
@@ -193,9 +189,8 @@ const App = () => {
         } catch (err: any) {
             console.error("❌ Payment Verification Error:", err);
             if (currentSession) await loadProfile(currentSession.user.id);
-            
             setNotification({ 
-                text: `El pago se procesó pero hubo un error verificando: ${err.message}. Contactá a soporte si no ves tu plan actualizado.`, 
+                text: `El pago se procesó pero hubo un error verificando: ${err.message}.`, 
                 type: 'error' 
             });
             setPage(Page.Dashboard);
@@ -226,16 +221,8 @@ const App = () => {
         let sessionRef: Session | null = null;
 
         try {
-            const dataPromise = fetchAppData();
-            const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 7000));
-            
-            const dbData = await Promise.race([dataPromise, timeoutPromise]);
-            
-            if (dbData) {
-                setAppData(dbData as AppData);
-            } else {
-                console.warn("⚠️ Data load timed out or failed. Continuing with minimal UI.");
-            }
+            // Carga de datos inicial
+            await refreshData();
 
             const { data: { session: initSession }, error } = await supabase.auth.getSession();
             if (error) console.warn("Error getting session:", error);
@@ -244,37 +231,25 @@ const App = () => {
             if (initSession) {
                 setSession(initSession);
                 lastSessionIdRef.current = initSession.user.id;
-                
-                if (!isPaymentReturn) {
-                   await loadProfile(initSession.user.id);
-                }
+                if (!isPaymentReturn) await loadProfile(initSession.user.id);
             }
 
             if (isPaymentReturn) {
                 if (!initSession) {
-                    const url = new URL(window.location.href);
-                    const paramsToRemove = ['collection_id', 'collection_status', 'payment_id', 'status', 'external_reference'];
-                    paramsToRemove.forEach(p => url.searchParams.delete(p));
-                    window.history.replaceState(null, '', url.toString());
-
                     setNotification({ 
-                        text: 'Tu sesión expiró durante el pago. Por favor, iniciá sesión para verificar tu plan.', 
+                        text: 'Tu sesión expiró. Por favor, iniciá sesión.', 
                         type: 'error' 
                     });
                     setPage(Page.Auth);
                     setIsInitializing(false);
-                    isInitializingRef.current = false;
                     return; 
                 }
-
                 if (!hasProcessedPayment.current) {
                     hasProcessedPayment.current = true;
                     await processPaymentReturn(paymentId, status, initSession);
                 }
             } else {
-                if (initSession) {
-                    setPage(resolveInitialPage());
-                }
+                if (initSession) setPage(resolveInitialPage());
             }
 
         } catch (err) {
@@ -305,7 +280,6 @@ const App = () => {
              if (currentUserId !== newUserId) {
                  lastSessionIdRef.current = newUserId;
                  setSession(newSession);
-
                  if (!verifyingPaymentRef.current && !isInitializingRef.current) {
                      await loadProfile(newUserId);
                  }
@@ -325,10 +299,28 @@ const App = () => {
     return () => subscription.unsubscribe();
   }, [loadProfile]); 
 
-  const refreshData = async () => {
-    const dbData = await fetchAppData();
-    if (dbData) setAppData(dbData);
-  };
+
+  // ==================================================================================
+  // 5. REALTIME DATA LISTENER (NUEVO: SOLUCIÓN PANTALLA EN BLANCO)
+  // ==================================================================================
+  useEffect(() => {
+    // Escuchar cambios globales en la tabla de comercios
+    const channel = supabase.channel('global-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'comercios' },
+        (payload) => {
+          console.log('⚡ Cambio detectado en DB (Comercios):', payload.eventType);
+          refreshData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
 
   // ==================================================================================
   // UI RENDERING
@@ -392,7 +384,6 @@ const App = () => {
         </div>
       )}
 
-      {/* --- BOTÓN DE NOTIFICACIONES: Solo visible si hay sesión iniciada --- */}
       {session && <NotificationButton userId={session.user.id} />}
 
       <Header session={session} profile={profile} onNavigate={handleNavigate} onLogout={handleLogout} />
