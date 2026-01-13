@@ -9,6 +9,9 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      strategies: 'injectManifest', // CRÍTICO: Usamos nuestro propio sw.ts
+      srcDir: 'src',
+      filename: 'sw.ts',
       includeAssets: ['icon.svg'], 
       manifest: {
         name: 'Guía Comercial Argentina',
@@ -38,15 +41,6 @@ export default defineConfig({
             purpose: 'any maskable'
           }
         ]
-      },
-      workbox: {
-        cleanupOutdatedCaches: true,
-        clientsClaim: true,
-        skipWaiting: true,
-        navigateFallback: '/index.html',
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-        // runtimeCaching ELIMINADO: Dejamos que el navegador maneje las peticiones a Supabase/MP
-        // de forma nativa para evitar errores de CORS y bloqueos del Service Worker.
       }
     })
   ],

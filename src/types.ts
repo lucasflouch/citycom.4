@@ -188,3 +188,11 @@ export interface Session {
   };
   [key: string]: any;
 }
+
+// NUEVO: Interfaz para envío de notificaciones
+export interface PushNotificationPayload {
+  title: string;
+  body: string;
+  url?: string;
+  userIds: string[]; // Array de IDs de usuario a notificar
+}

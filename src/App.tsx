@@ -14,6 +14,7 @@ import PricingPage from './pages/PricingPage';
 import ProfilePage from './pages/ProfilePage';
 import AdminPage from './pages/AdminPage';
 import Header from './components/Header';
+import NotificationButton from './components/NotificationButton'; // Importación Nueva
 
 const App = () => {
   // --- ESTADO GLOBAL ---
@@ -147,8 +148,6 @@ const App = () => {
 
     // CASO DE FALLO O CANCELACIÓN
     if (status === 'failure' || status === 'rejected' || status === 'null') {
-        // CRÍTICO: Debemos cargar el perfil aunque falle el pago, 
-        // de lo contrario la UI protegida (Page.Pricing) se quedará en loop de carga.
         if (currentSession?.user?.id) {
              console.log("💳 Pago fallido. Cargando perfil existente para evitar bloqueo UI...");
              await loadProfile(currentSession.user.id);
@@ -169,7 +168,7 @@ const App = () => {
 
     // CASO ÉXITO
     if (paymentId && (status === 'approved' || status === 'success')) {
-        setVerifyingPayment(true); // Activa el Ref via useEffect
+        setVerifyingPayment(true);
         setPaymentStatusText("Verificando transacción con Mercado Pago...");
         
         const safetyTimer = setTimeout(() => setShowForceExit(true), 10000);
@@ -193,7 +192,6 @@ const App = () => {
 
         } catch (err: any) {
             console.error("❌ Payment Verification Error:", err);
-            // Fallback: intentar cargar perfil de todas formas
             if (currentSession) await loadProfile(currentSession.user.id);
             
             setNotification({ 
@@ -215,7 +213,6 @@ const App = () => {
   useEffect(() => {
     if (hasInitialized.current) return;
     hasInitialized.current = true;
-    // Marcamos inicio de boot
     isInitializingRef.current = true;
 
     const initApp = async () => {
@@ -229,7 +226,6 @@ const App = () => {
         let sessionRef: Session | null = null;
 
         try {
-            // TIMEOUT SAFETY: Evita que la app se cuelgue si Supabase tarda demasiado en data inicial
             const dataPromise = fetchAppData();
             const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 7000));
             
@@ -249,8 +245,6 @@ const App = () => {
                 setSession(initSession);
                 lastSessionIdRef.current = initSession.user.id;
                 
-                // Si NO es retorno de pago, cargamos perfil normalmente.
-                // Si ES retorno de pago, lo delegamos a processPaymentReturn para manejar los estados.
                 if (!isPaymentReturn) {
                    await loadProfile(initSession.user.id);
                 }
@@ -287,11 +281,9 @@ const App = () => {
             console.error("Fatal init error:", err);
             if (sessionRef) await loadProfile(sessionRef.user.id);
         } finally {
-            // Siempre desbloqueamos la UI
             if (!isPaymentReturn) setIsInitializing(false);
-            // Liberamos el lock del listener
             isInitializingRef.current = false;
-            setIsInitializing(false); // Aseguramos que el spinner se vaya
+            setIsInitializing(false);
             console.groupEnd();
         }
     };
@@ -311,18 +303,11 @@ const App = () => {
              const newUserId = newSession.user.id;
 
              if (currentUserId !== newUserId) {
-                 console.log(`👤 Cambio de usuario detectado (${currentUserId} -> ${newUserId}).`);
                  lastSessionIdRef.current = newUserId;
                  setSession(newSession);
 
-                 // GUARDIA CRÍTICA:
-                 // 1. No interrumpir verificación de pago.
-                 // 2. No interrumpir la inicialización (initApp ya se encarga de la carga inicial).
                  if (!verifyingPaymentRef.current && !isInitializingRef.current) {
-                     console.log("⚡ Carga de perfil disparada por listener.");
                      await loadProfile(newUserId);
-                 } else {
-                     console.log("✋ Carga de perfil pospuesta (App inicializando o verificando pago).");
                  }
              } else {
                  setSession(newSession); 
@@ -352,9 +337,6 @@ const App = () => {
   const renderProtectedPage = (Component: React.ReactNode) => {
     if (!session) return <AuthPage onNavigate={handleNavigate} />;
     
-    // Si hay sesión pero no perfil, mostramos carga.
-    // El fix en processPaymentReturn asegura que si el pago falla, el perfil se carga igual,
-    // evitando que el usuario quede atrapado aquí.
     if (!profile) {
         return (
             <div className="flex flex-col items-center justify-center min-h-[50vh]">
@@ -409,6 +391,9 @@ const App = () => {
             </div>
         </div>
       )}
+
+      {/* --- BOTÓN DE NOTIFICACIONES: Solo visible si hay sesión iniciada --- */}
+      {session && <NotificationButton userId={session.user.id} />}
 
       <Header session={session} profile={profile} onNavigate={handleNavigate} onLogout={handleLogout} />
       
