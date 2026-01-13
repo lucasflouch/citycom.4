@@ -212,7 +212,7 @@ const ComercioDetailPage: React.FC<ComercioDetailPageProps> = ({ comercioId, app
             <h3 className="text-lg font-black uppercase mb-8 border-b border-white/10 pb-4 tracking-widest italic">Contacto Directo</h3>
             <div className="space-y-4">
               
-              {/* BOTÓN DE CHAT PROMINENTE */}
+              {/* BOTÓN DE CHAT PROMINENTE (ACTUALIZADO) */}
               {!isOwner && planAllowsChat && (
                 <button
                   onClick={handleStartChat}
@@ -221,8 +221,8 @@ const ComercioDetailPage: React.FC<ComercioDetailPageProps> = ({ comercioId, app
                 >
                   <span className="text-2xl group-hover:rotate-12 transition-transform">💬</span>
                   <div className="text-left">
-                    <p className="text-[9px] uppercase opacity-60 tracking-widest text-indigo-400">Mensaje Interno</p>
-                    <p className="text-lg leading-tight">{chatLoading ? "Iniciando..." : "Chat con el Vendedor"}</p>
+                    <p className="text-[9px] uppercase opacity-60 tracking-widest text-indigo-400">Consultas</p>
+                    <p className="text-lg leading-tight">{chatLoading ? "Iniciando..." : "Enviar mensaje interno"}</p>
                   </div>
                 </button>
               )}
@@ -249,7 +249,7 @@ const ComercioDetailPage: React.FC<ComercioDetailPageProps> = ({ comercioId, app
               <ShareButton 
                 title={`Mirá ${comercio.nombre}`}
                 text={`¡Che, mirá este lugar que encontré en la Guía Comercial! Se llama ${comercio.nombre}.`}
-                url={`?comercio=${comercio.id}`} // En una app real usaríamos rutas limpias, aquí query param o hash es manejado por el routing básico.
+                url={`?comercio=${comercio.id}`}
                 variant="block"
                 label="Recomendar este lugar"
               />
